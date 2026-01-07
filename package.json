@@ -1,12 +1,25 @@
 {
-  "name": "ynab-mcp-server",
-  "version": "0.1.2",
-  "description": "ynab-mcp-server MCP server",
-  "author": "Caleb LeNoir <caleb.lenoir@hey.com>",
+  "name": "@jyoansah/ynab-mcp",
+  "version": "1.0.0",
+  "description": "YNAB MCP server with multi-token, multi-budget, multi-account support",
+  "author": "Yaw Owusu-Ansah <jyoansah@gmail.com>",
   "type": "module",
   "bin": {
-    "ynab-mcp-server": "./dist/index.js"
+    "ynab-mcp": "./dist/index.js"
   },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jyoansah/ynab-mcp.git"
+  },
+  "keywords": [
+    "ynab",
+    "mcp",
+    "model-context-protocol",
+    "budget",
+    "finance",
+    "ai"
+  ],
+  "license": "MIT",
   "files": [
     "dist"
   ],

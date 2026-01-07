@@ -1,45 +1,82 @@
 #!/usr/bin/env node
+/**
+ * YNAB MCP Server
+ *
+ * Multi-profile, multi-budget YNAB integration for AI assistants.
+ * Supports multiple YNAB accounts, budget aliases, and default accounts.
+ */
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import * as ynab from "ynab";
-// Import all tools
-import * as ListBudgetsTool from "./tools/ListBudgetsTool.js";
-import * as GetUnapprovedTransactionsTool from "./tools/GetUnapprovedTransactionsTool.js";
-import * as BudgetSummaryTool from "./tools/BudgetSummaryTool.js";
-import * as CreateTransactionTool from "./tools/CreateTransactionTool.js";
-import * as ApproveTransactionTool from "./tools/ApproveTransactionTool.js";
+// Import consolidated tools
+import * as YnabBudgets from "./tools/ynab-budgets.js";
+import * as YnabAccounts from "./tools/ynab-accounts.js";
+import * as YnabAccountsWrite from "./tools/ynab-accounts-write.js";
+import * as YnabTransactionsRead from "./tools/ynab-transactions-read.js";
+import * as YnabTransactionsWrite from "./tools/ynab-transactions-write.js";
+import * as YnabCategoriesRead from "./tools/ynab-categories-read.js";
+import * as YnabCategoriesWrite from "./tools/ynab-categories-write.js";
+import * as YnabPayees from "./tools/ynab-payees.js";
+// Validate configuration on startup
+import { getConfig, listProfiles } from "./config.js";
 const server = new McpServer({
-    name: "ynab-mcp-server",
-    version: "0.1.2",
+    name: "ynab-mcp",
+    version: "1.0.0",
 });
-// Initialize YNAB API
-const api = new ynab.API(process.env.YNAB_API_TOKEN || "");
-// Register all tools
-server.registerTool(ListBudgetsTool.name, {
-    title: "List Budgets",
-    description: ListBudgetsTool.description,
-    inputSchema: ListBudgetsTool.inputSchema,
-}, async (input) => ListBudgetsTool.execute(input, api));
-server.registerTool(GetUnapprovedTransactionsTool.name, {
-    title: "Get Unapproved Transactions",
-    description: GetUnapprovedTransactionsTool.description,
-    inputSchema: GetUnapprovedTransactionsTool.inputSchema,
-}, async (input) => GetUnapprovedTransactionsTool.execute(input, api));
-server.registerTool(BudgetSummaryTool.name, {
-    title: "Budget Summary",
-    description: BudgetSummaryTool.description,
-    inputSchema: BudgetSummaryTool.inputSchema,
-}, async (input) => BudgetSummaryTool.execute(input, api));
-server.registerTool(CreateTransactionTool.name, {
-    title: "Create Transaction",
-    description: CreateTransactionTool.description,
-    inputSchema: CreateTransactionTool.inputSchema,
-}, async (input) => CreateTransactionTool.execute(input, api));
-server.registerTool(ApproveTransactionTool.name, {
-    title: "Approve Transaction",
-    description: ApproveTransactionTool.description,
-    inputSchema: ApproveTransactionTool.inputSchema,
-}, async (input) => ApproveTransactionTool.execute(input, api));
+// Validate config at startup
+try {
+    const config = getConfig();
+    const profiles = listProfiles();
+    console.error(`YNAB MCP: Loaded ${profiles.length} profile(s): ${profiles.join(", ")}`);
+    console.error(`YNAB MCP: Default profile: ${config.defaultProfile}, Default budget: ${config.defaultBudget}`);
+}
+catch (error) {
+    console.error("YNAB MCP: Configuration error:", error instanceof Error ? error.message : error);
+    console.error("YNAB MCP: See README for environment variable setup");
+    process.exit(1);
+}
+// Register consolidated tools (8 total)
+// Read-only tools (4)
+server.registerTool(YnabBudgets.name, {
+    title: "YNAB Budgets",
+    description: YnabBudgets.description,
+    inputSchema: YnabBudgets.inputSchema,
+}, async (input) => YnabBudgets.execute(input));
+server.registerTool(YnabAccounts.name, {
+    title: "YNAB Accounts",
+    description: YnabAccounts.description,
+    inputSchema: YnabAccounts.inputSchema,
+}, async (input) => YnabAccounts.execute(input));
+server.registerTool(YnabTransactionsRead.name, {
+    title: "YNAB Transactions (Read)",
+    description: YnabTransactionsRead.description,
+    inputSchema: YnabTransactionsRead.inputSchema,
+}, async (input) => YnabTransactionsRead.execute(input));
+server.registerTool(YnabCategoriesRead.name, {
+    title: "YNAB Categories (Read)",
+    description: YnabCategoriesRead.description,
+    inputSchema: YnabCategoriesRead.inputSchema,
+}, async (input) => YnabCategoriesRead.execute(input));
+// Write tools (4)
+server.registerTool(YnabTransactionsWrite.name, {
+    title: "YNAB Transactions (Write)",
+    description: YnabTransactionsWrite.description,
+    inputSchema: YnabTransactionsWrite.inputSchema,
+}, async (input) => YnabTransactionsWrite.execute(input));
+server.registerTool(YnabCategoriesWrite.name, {
+    title: "YNAB Categories (Write)",
+    description: YnabCategoriesWrite.description,
+    inputSchema: YnabCategoriesWrite.inputSchema,
+}, async (input) => YnabCategoriesWrite.execute(input));
+server.registerTool(YnabAccountsWrite.name, {
+    title: "YNAB Accounts (Write)",
+    description: YnabAccountsWrite.description,
+    inputSchema: YnabAccountsWrite.inputSchema,
+}, async (input) => YnabAccountsWrite.execute(input));
+server.registerTool(YnabPayees.name, {
+    title: "YNAB Payees",
+    description: YnabPayees.description,
+    inputSchema: YnabPayees.inputSchema,
+}, async (input) => YnabPayees.execute(input));
 // Start the server
 async function main() {
     const transport = new StdioServerTransport();

@@ -9,9 +9,10 @@ export const name = "ynab_budgets";
 export const description = `Budget operations for YNAB. Actions:
 - list: List all budgets for profile
 - get: Get budget details with optional month summary
+- months: List all budget months with summaries
 - profiles: List configured profiles and their budgets`;
 export const inputSchema = {
-    action: z.enum(["list", "get", "profiles"]).describe("Action to perform"),
+    action: z.enum(["list", "get", "months", "profiles"]).describe("Action to perform"),
     profile: z.string().optional().describe("Profile name (optional, uses default)"),
     budget: z.string().optional().describe("Budget alias or ID (for 'get' action)"),
     month: z.string().optional().describe("Month in YYYY-MM-DD format (for 'get' action, defaults to current month)")
@@ -66,8 +67,30 @@ export async function execute(input) {
                     categoryGroups: monthData.categories?.length || 0
                 });
             }
+            case "months": {
+                const api = getApiClient(profile);
+                const budgetId = resolveBudgetId(budget, profile);
+                const response = await api.months.getBudgetMonths(budgetId);
+                const budgetResponse = await api.budgets.getBudgetById(budgetId);
+                const currencyCode = budgetResponse.data.budget.currency_format?.iso_code || 'USD';
+                const months = response.data.months.map(m => ({
+                    month: m.month,
+                    note: m.note,
+                    income: (m.income / 1000).toFixed(2),
+                    budgeted: (m.budgeted / 1000).toFixed(2),
+                    activity: (m.activity / 1000).toFixed(2),
+                    to_be_budgeted: (m.to_be_budgeted / 1000).toFixed(2),
+                    age_of_money: m.age_of_money
+                }));
+                return createResponse({
+                    budget: budgetResponse.data.budget.name,
+                    currency: currencyCode,
+                    count: months.length,
+                    months
+                });
+            }
             default:
-                return createErrorResponse(`Unknown action: ${action}. Use: list, get, profiles`);
+                return createErrorResponse(`Unknown action: ${action}. Use: list, get, months, profiles`);
         }
     }
     catch (error) {

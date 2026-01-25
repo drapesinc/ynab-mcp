@@ -15,10 +15,12 @@ export const description = `Transaction mutation operations for YNAB. Actions:
 - update: Update existing transaction
 - delete: Delete transaction
 - approve: Approve or unapprove transaction
-- adjust: Create balance adjustment for tracking accounts`;
+- bulk_approve: Approve multiple transactions at once
+- adjust: Create balance adjustment for tracking accounts
+- import: Trigger import from linked financial institutions`;
 
 export const inputSchema = {
-  action: z.enum(["create", "update", "delete", "approve", "adjust"]).describe("Action to perform"),
+  action: z.enum(["create", "update", "delete", "approve", "bulk_approve", "adjust", "import"]).describe("Action to perform"),
   profile: z.string().optional().describe("Profile name (optional, uses default)"),
   budget: z.string().optional().describe("Budget alias or ID (optional, uses default)"),
   account: z.string().optional().describe("Account name or ID"),
@@ -34,7 +36,8 @@ export const inputSchema = {
     amount: z.number().describe("Split amount in dollars"),
     category: z.string().describe("Category name or ID"),
     memo: z.string().optional().describe("Split memo")
-  })).optional().describe("Split transaction categories")
+  })).optional().describe("Split transaction categories"),
+  transaction_ids: z.array(z.string()).optional().describe("Array of transaction IDs (for bulk_approve)")
 };
 
 interface ExecuteInput {
@@ -51,13 +54,15 @@ interface ExecuteInput {
   cleared?: string;
   approved?: boolean;
   splits?: Array<{ amount: number; category: string; memo?: string }>;
+  transaction_ids?: string[];
 }
 
 export async function execute(input: ExecuteInput) {
   try {
     const {
       action, profile, budget, account, transaction_id,
-      amount, payee, category, memo, date, cleared, approved, splits
+      amount, payee, category, memo, date, cleared, approved, splits,
+      transaction_ids
     } = input;
 
     const api = getApiClient(profile);
@@ -306,8 +311,53 @@ export async function execute(input: ExecuteInput) {
         });
       }
 
+      case "bulk_approve": {
+        if (!transaction_ids || transaction_ids.length === 0) {
+          return createErrorResponse("'transaction_ids' array is required for bulk_approve action");
+        }
+
+        const transactions: ynab.SaveTransactionWithIdOrImportId[] = transaction_ids.map(id => ({
+          id,
+          approved: true
+        }));
+
+        const response = await api.transactions.updateTransactions(budgetId, { transactions });
+
+        if (!response.data.transactions) {
+          return createErrorResponse("Failed to update transactions - no data returned");
+        }
+
+        const updated = response.data.transactions.map(t => ({
+          id: t.id,
+          date: t.date,
+          amount: (t.amount / 1000).toFixed(2),
+          payee: t.payee_name,
+          approved: t.approved
+        }));
+
+        return createResponse({
+          success: true,
+          message: `Approved ${updated.length} transaction(s)`,
+          approved_count: updated.length,
+          transactions: updated
+        });
+      }
+
+      case "import": {
+        const response = await api.transactions.importTransactions(budgetId);
+
+        return createResponse({
+          success: true,
+          transaction_ids: response.data.transaction_ids,
+          imported_count: response.data.transaction_ids.length,
+          message: response.data.transaction_ids.length > 0
+            ? `Imported ${response.data.transaction_ids.length} transaction(s) from linked accounts`
+            : "No new transactions to import"
+        });
+      }
+
       default:
-        return createErrorResponse(`Unknown action: ${action}. Use: create, update, delete, approve, adjust`);
+        return createErrorResponse(`Unknown action: ${action}. Use: create, update, delete, approve, bulk_approve, adjust, import`);
     }
   } catch (error) {
     console.error("Error in ynab_transactions_write:", error);

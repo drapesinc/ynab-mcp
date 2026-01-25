@@ -12,10 +12,11 @@ export const name = "ynab_transactions_read";
 export const description = `Transaction query operations for YNAB. Actions:
 - list: Filter transactions by date, account, category, payee, status, amount
 - search: Fuzzy search by payee or memo
-- unapproved: Get pending/unapproved transactions`;
+- unapproved: Get pending/unapproved transactions
+- scheduled: List recurring/scheduled transactions`;
 
 export const inputSchema = {
-  action: z.enum(["list", "search", "unapproved"]).describe("Action to perform"),
+  action: z.enum(["list", "search", "unapproved", "scheduled"]).describe("Action to perform"),
   profile: z.string().optional().describe("Profile name (optional, uses default)"),
   budget: z.string().optional().describe("Budget alias or ID (optional, uses default)"),
   account: z.string().optional().describe("Filter by account name or ID"),
@@ -186,8 +187,34 @@ export async function execute(input: ExecuteInput) {
         });
       }
 
+      case "scheduled": {
+        const response = await api.scheduledTransactions.getScheduledTransactions(budgetId);
+
+        const scheduled = response.data.scheduled_transactions
+          .filter(t => !t.deleted)
+          .map(t => ({
+            id: t.id,
+            date_first: t.date_first,
+            date_next: t.date_next,
+            frequency: t.frequency,
+            amount: (t.amount / 1000).toFixed(2),
+            account: t.account_name,
+            payee: t.payee_name,
+            category: t.category_name,
+            memo: t.memo,
+            flag: t.flag_color
+          }));
+
+        return createResponse({
+          budget: budgetResponse.data.budget.name,
+          currency: currencyCode,
+          count: scheduled.length,
+          scheduled_transactions: scheduled
+        });
+      }
+
       default:
-        return createErrorResponse(`Unknown action: ${action}. Use: list, search, unapproved`);
+        return createErrorResponse(`Unknown action: ${action}. Use: list, search, unapproved, scheduled`);
     }
   } catch (error) {
     console.error("Error in ynab_transactions_read:", error);

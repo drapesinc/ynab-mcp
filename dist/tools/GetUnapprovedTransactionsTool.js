@@ -1,6 +1,7 @@
 import { z } from "zod";
 import * as ynab from "ynab";
-export const name = "get_unapproved_transactions";
+import { getErrorMessage } from "./errorUtils.js";
+export const name = "ynab_get_unapproved_transactions";
 export const description = "Gets unapproved transactions from a budget. First time pulls last 3 days, subsequent pulls use server knowledge to get only changes.";
 export const inputSchema = {
     budgetId: z.string().optional().describe("The ID of the budget to fetch transactions for (optional, defaults to the budget set in the YNAB_BUDGET_ID environment variable)"),
@@ -15,7 +16,7 @@ function getBudgetId(inputBudgetId) {
 export async function execute(input, api) {
     try {
         const budgetId = getBudgetId(input.budgetId);
-        console.log(`Getting unapproved transactions for budget ${budgetId}`);
+        console.error(`Getting unapproved transactions for budget ${budgetId}`);
         const response = await api.transactions.getTransactions(budgetId, undefined, ynab.GetTransactionsTypeEnum.Unapproved);
         // Transform the transactions to a more readable format
         const transactions = response.data.transactions
@@ -42,10 +43,12 @@ export async function execute(input, api) {
         };
     }
     catch (error) {
-        console.error(`Error getting unapproved transactions for budget ${input.budgetId || process.env.YNAB_BUDGET_ID}:`);
-        console.error(JSON.stringify(error, null, 2));
+        console.error("Error getting unapproved transactions:", error);
         return {
-            content: [{ type: "text", text: `Error getting unapproved transactions: ${error instanceof Error ? error.message : JSON.stringify(error)}` }]
+            content: [{ type: "text", text: JSON.stringify({
+                        success: false,
+                        error: getErrorMessage(error),
+                    }, null, 2) }]
         };
     }
 }

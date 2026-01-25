@@ -184,7 +184,9 @@ describe('ListBudgetsTool', () => {
 
       const result = await ListBudgetsTool.execute({}, mockApi as any);
 
-      expect(result.content[0].text).toContain('Error listing budgets:');
+      const response = JSON.parse(result.content[0].text);
+      expect(response.success).toBe(false);
+      expect(response.error).toContain('API Error: Unauthorized');
     });
 
     it('should handle budgets with special characters in names', async () => {
@@ -249,7 +251,7 @@ describe('ListBudgetsTool', () => {
 
   describe('tool configuration', () => {
     it('should have correct name and description', () => {
-      expect(ListBudgetsTool.name).toBe('list_budgets');
+      expect(ListBudgetsTool.name).toBe('ynab_list_budgets');
       expect(ListBudgetsTool.description).toBe('Lists all available budgets from YNAB API');
     });
 

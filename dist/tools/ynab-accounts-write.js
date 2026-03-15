@@ -27,8 +27,8 @@ export async function execute(input) {
         const api = getApiClient(profile);
         const budgetId = resolveBudgetId(budget, profile);
         // Get budget currency
-        const budgetResponse = await api.budgets.getBudgetById(budgetId);
-        const currencyCode = budgetResponse.data.budget.currency_format?.iso_code || 'USD';
+        const planResponse = await api.plans.getPlanById(budgetId);
+        const currencyCode = planResponse.data.plan.currency_format?.iso_code || 'USD';
         switch (action) {
             case "create": {
                 if (!accountName) {

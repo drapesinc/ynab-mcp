@@ -1,6 +1,6 @@
 /**
  * ynab_transactions_write - Transaction mutation operations
- * Actions: create, update, delete, approve, adjust
+ * Actions: create, update, delete, approve, adjust, create_scheduled, update_scheduled, delete_scheduled
  */
 
 import { z } from "zod";
@@ -17,14 +17,17 @@ export const description = `Transaction mutation operations for YNAB. Actions:
 - approve: Approve or unapprove transaction
 - bulk_approve: Approve multiple transactions at once
 - adjust: Create balance adjustment for tracking accounts
-- import: Trigger import from linked financial institutions`;
+- import: Trigger import from linked financial institutions
+- create_scheduled: Create a scheduled/recurring transaction
+- update_scheduled: Update an existing scheduled transaction
+- delete_scheduled: Delete a scheduled transaction`;
 
 export const inputSchema = {
-  action: z.enum(["create", "update", "delete", "approve", "bulk_approve", "adjust", "import"]).describe("Action to perform"),
+  action: z.enum(["create", "update", "delete", "approve", "bulk_approve", "adjust", "import", "create_scheduled", "update_scheduled", "delete_scheduled"]).describe("Action to perform"),
   profile: z.string().optional().describe("Profile name (optional, uses default)"),
   budget: z.string().optional().describe("Budget alias or ID (optional, uses default)"),
   account: z.string().optional().describe("Account name or ID"),
-  transaction_id: z.string().optional().describe("Transaction ID (for update, delete, approve)"),
+  transaction_id: z.string().optional().describe("Transaction ID (for update, delete, approve) or scheduled transaction ID (for update_scheduled, delete_scheduled)"),
   amount: z.number().optional().describe("Amount in dollars (negative = outflow, positive = inflow)"),
   payee: z.string().optional().describe("Payee name or ID"),
   category: z.string().optional().describe("Category name or ID"),
@@ -37,7 +40,8 @@ export const inputSchema = {
     category: z.string().describe("Category name or ID"),
     memo: z.string().optional().describe("Split memo")
   })).optional().describe("Split transaction categories"),
-  transaction_ids: z.array(z.string()).optional().describe("Array of transaction IDs (for bulk_approve)")
+  transaction_ids: z.array(z.string()).optional().describe("Array of transaction IDs (for bulk_approve)"),
+  frequency: z.enum(["never", "daily", "weekly", "everyOtherWeek", "twiceAMonth", "every4Weeks", "monthly", "everyOtherMonth", "every3Months", "every4Months", "twiceAYear", "yearly", "everyOtherYear"]).optional().describe("Frequency for scheduled transactions")
 };
 
 interface ExecuteInput {
@@ -55,6 +59,7 @@ interface ExecuteInput {
   approved?: boolean;
   splits?: Array<{ amount: number; category: string; memo?: string }>;
   transaction_ids?: string[];
+  frequency?: string;
 }
 
 export async function execute(input: ExecuteInput) {
@@ -62,15 +67,15 @@ export async function execute(input: ExecuteInput) {
     const {
       action, profile, budget, account, transaction_id,
       amount, payee, category, memo, date, cleared, approved, splits,
-      transaction_ids
+      transaction_ids, frequency
     } = input;
 
     const api = getApiClient(profile);
     const budgetId = resolveBudgetId(budget, profile);
 
     // Get budget currency
-    const budgetResponse = await api.budgets.getBudgetById(budgetId);
-    const currencyCode = budgetResponse.data.budget.currency_format?.iso_code || 'USD';
+    const planResponse = await api.plans.getPlanById(budgetId);
+    const currencyCode = planResponse.data.plan.currency_format?.iso_code || 'USD';
 
     switch (action) {
       case "create": {
@@ -158,8 +163,8 @@ export async function execute(input: ExecuteInput) {
         const existingResponse = await api.transactions.getTransactionById(budgetId, transaction_id);
         const existing = existingResponse.data.transaction;
 
-        // Build update
-        const update: ynab.SaveTransactionWithOptionalFields = {
+        // Build update using ExistingTransaction type (SDK v4)
+        const update: ynab.ExistingTransaction = {
           account_id: existing.account_id,
           amount: amount !== undefined ? dollarsToMilliunits(amount) : existing.amount,
           date: date ? formatDate(date) : existing.date,
@@ -226,11 +231,7 @@ export async function execute(input: ExecuteInput) {
           return createErrorResponse("'transaction_id' is required for approve action");
         }
 
-        // Get existing transaction
-        const existingResponse = await api.transactions.getTransactionById(budgetId, transaction_id);
-        const existing = existingResponse.data.transaction;
-
-        const update: ynab.SaveTransactionWithOptionalFields = {
+        const update: ynab.ExistingTransaction = {
           approved: approved !== undefined ? approved : true,
         };
 
@@ -356,8 +357,141 @@ export async function execute(input: ExecuteInput) {
         });
       }
 
+      case "create_scheduled": {
+        if (!account) {
+          return createErrorResponse("'account' is required for create_scheduled action");
+        }
+        if (!date) {
+          return createErrorResponse("'date' is required for create_scheduled action (first occurrence, YYYY-MM-DD)");
+        }
+
+        const accountId = await resolveAccountId(account, budget, profile);
+
+        const scheduledTx: ynab.SaveScheduledTransaction = {
+          account_id: accountId,
+          date: formatDate(date),
+          amount: amount !== undefined ? dollarsToMilliunits(amount) : undefined,
+          frequency: (frequency as ynab.ScheduledTransactionFrequency) || undefined,
+          memo: memo || undefined,
+        };
+
+        if (payee) {
+          const payeeId = await resolvePayeeId(payee, budget, profile);
+          if (payeeId.includes('-')) {
+            scheduledTx.payee_id = payeeId;
+          } else {
+            scheduledTx.payee_name = payee;
+          }
+        }
+
+        if (category) {
+          scheduledTx.category_id = await resolveCategoryId(category, budget, profile);
+        }
+
+        const response = await api.scheduledTransactions.createScheduledTransaction(
+          budgetId,
+          { scheduled_transaction: scheduledTx }
+        );
+        const created = response.data.scheduled_transaction;
+
+        return createResponse({
+          success: true,
+          message: "Scheduled transaction created",
+          scheduled_transaction: {
+            id: created.id,
+            date_first: created.date_first,
+            date_next: created.date_next,
+            frequency: created.frequency,
+            amount: (created.amount / 1000).toFixed(2),
+            account: created.account_name,
+            payee: created.payee_name,
+            category: created.category_name,
+            memo: created.memo,
+            flag: created.flag_color
+          }
+        });
+      }
+
+      case "update_scheduled": {
+        if (!transaction_id) {
+          return createErrorResponse("'transaction_id' (scheduled transaction ID) is required for update_scheduled action");
+        }
+
+        // Get existing scheduled transaction to preserve required fields
+        const existingSchedResponse = await api.scheduledTransactions.getScheduledTransactionById(budgetId, transaction_id);
+        const existingSched = existingSchedResponse.data.scheduled_transaction;
+
+        const scheduledUpdate: ynab.SaveScheduledTransaction = {
+          account_id: account ? await resolveAccountId(account, budget, profile) : existingSched.account_id,
+          date: date ? formatDate(date) : existingSched.date_next,
+        };
+
+        if (amount !== undefined) {
+          scheduledUpdate.amount = dollarsToMilliunits(amount);
+        }
+
+        if (frequency) {
+          scheduledUpdate.frequency = frequency as ynab.ScheduledTransactionFrequency;
+        }
+
+        if (memo !== undefined) {
+          scheduledUpdate.memo = memo || undefined;
+        }
+
+        if (payee) {
+          const payeeId = await resolvePayeeId(payee, budget, profile);
+          if (payeeId.includes('-')) {
+            scheduledUpdate.payee_id = payeeId;
+          } else {
+            scheduledUpdate.payee_name = payee;
+          }
+        }
+
+        if (category) {
+          scheduledUpdate.category_id = await resolveCategoryId(category, budget, profile);
+        }
+
+        const response = await api.scheduledTransactions.updateScheduledTransaction(
+          budgetId,
+          transaction_id,
+          { scheduled_transaction: scheduledUpdate }
+        );
+        const updated = response.data.scheduled_transaction;
+
+        return createResponse({
+          success: true,
+          message: "Scheduled transaction updated",
+          scheduled_transaction: {
+            id: updated.id,
+            date_first: updated.date_first,
+            date_next: updated.date_next,
+            frequency: updated.frequency,
+            amount: (updated.amount / 1000).toFixed(2),
+            account: updated.account_name,
+            payee: updated.payee_name,
+            category: updated.category_name,
+            memo: updated.memo,
+            flag: updated.flag_color
+          }
+        });
+      }
+
+      case "delete_scheduled": {
+        if (!transaction_id) {
+          return createErrorResponse("'transaction_id' (scheduled transaction ID) is required for delete_scheduled action");
+        }
+
+        await api.scheduledTransactions.deleteScheduledTransaction(budgetId, transaction_id);
+
+        return createResponse({
+          success: true,
+          message: "Scheduled transaction deleted",
+          transaction_id
+        });
+      }
+
       default:
-        return createErrorResponse(`Unknown action: ${action}. Use: create, update, delete, approve, bulk_approve, adjust, import`);
+        return createErrorResponse(`Unknown action: ${action}. Use: create, update, delete, approve, bulk_approve, adjust, import, create_scheduled, update_scheduled, delete_scheduled`);
     }
   } catch (error) {
     console.error("Error in ynab_transactions_write:", error);

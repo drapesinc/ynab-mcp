@@ -153,5 +153,6 @@ export function formatTransaction(tx, currencyCode = 'USD') {
         memo: tx.memo || '',
         status: formatStatus(tx.cleared, tx.approved),
         account: tx.account_name,
+        flag_name: tx.flag_name || null,
     };
 }

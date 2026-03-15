@@ -8,7 +8,7 @@ import { resolveAccountId, resolveCategoryId } from "../utils/resolver.js";
 import { formatTransaction, dollarsToMilliunits, createResponse, createErrorResponse } from "../utils/formatter.js";
 export const name = "ynab_transactions_read";
 export const description = `Transaction query operations for YNAB. Actions:
-- list: Filter transactions by date, account, category, payee, status, amount
+- list: Filter transactions by date, month, account, category, payee, status, amount
 - search: Fuzzy search by payee or memo
 - unapproved: Get pending/unapproved transactions
 - scheduled: List recurring/scheduled transactions`;
@@ -18,6 +18,7 @@ export const inputSchema = {
     budget: z.string().optional().describe("Budget alias or ID (optional, uses default)"),
     account: z.string().optional().describe("Filter by account name or ID"),
     category: z.string().optional().describe("Filter by category name or ID"),
+    month: z.string().optional().describe("Get transactions for a specific month (YYYY-MM-DD format, e.g. 2026-03-01). When provided, fetches via month-specific endpoint."),
     since_date: z.string().optional().describe("Start date (YYYY-MM-DD)"),
     until_date: z.string().optional().describe("End date (YYYY-MM-DD)"),
     payee: z.string().optional().describe("Filter by payee name (partial match)"),
@@ -30,18 +31,23 @@ export const inputSchema = {
 };
 export async function execute(input) {
     try {
-        const { action, profile, budget, account, category, since_date, until_date, payee, memo, status, type, min_amount, max_amount, limit = 50 } = input;
+        const { action, profile, budget, account, category, month, since_date, until_date, payee, memo, status, type, min_amount, max_amount, limit = 50 } = input;
         const api = getApiClient(profile);
         const budgetId = resolveBudgetId(budget, profile);
         // Get budget currency
-        const budgetResponse = await api.budgets.getBudgetById(budgetId);
-        const currencyCode = budgetResponse.data.budget.currency_format?.iso_code || 'USD';
+        const planResponse = await api.plans.getPlanById(budgetId);
+        const currencyCode = planResponse.data.plan.currency_format?.iso_code || 'USD';
         switch (action) {
             case "list":
             case "search": {
                 let transactions;
-                // Use account-specific endpoint if account filter provided
-                if (account) {
+                // Use month-specific endpoint if month filter provided
+                if (month) {
+                    const response = await api.transactions.getTransactionsByMonth(budgetId, month);
+                    transactions = response.data.transactions;
+                }
+                else if (account) {
+                    // Use account-specific endpoint if account filter provided
                     const accountId = await resolveAccountId(account, budget, profile);
                     const response = await api.transactions.getTransactionsByAccount(budgetId, accountId, since_date);
                     transactions = response.data.transactions;
@@ -94,7 +100,7 @@ export async function execute(input) {
                     memo: t.memo ?? null
                 }, currencyCode));
                 return createResponse({
-                    budget: budgetResponse.data.budget.name,
+                    budget: planResponse.data.plan.name,
                     currency: currencyCode,
                     count: formatted.length,
                     transactions: formatted
@@ -123,7 +129,7 @@ export async function execute(input) {
                     memo: t.memo ?? null
                 }, currencyCode));
                 return createResponse({
-                    budget: budgetResponse.data.budget.name,
+                    budget: planResponse.data.plan.name,
                     currency: currencyCode,
                     count: formatted.length,
                     note: "These transactions need approval",
@@ -147,7 +153,7 @@ export async function execute(input) {
                     flag: t.flag_color
                 }));
                 return createResponse({
-                    budget: budgetResponse.data.budget.name,
+                    budget: planResponse.data.plan.name,
                     currency: currencyCode,
                     count: scheduled.length,
                     scheduled_transactions: scheduled

@@ -43,9 +43,9 @@ export async function execute(input: ExecuteInput) {
 
       case "list": {
         const api = getApiClient(profile);
-        const response = await api.budgets.getBudgets();
+        const response = await api.plans.getPlans();
 
-        const budgets = response.data.budgets.map(b => ({
+        const budgets = response.data.plans.map(b => ({
           id: b.id,
           name: b.name,
           lastModified: b.last_modified_on,
@@ -66,13 +66,13 @@ export async function execute(input: ExecuteInput) {
         const budgetId = resolveBudgetId(budget, profile);
 
         // Get budget details
-        const budgetResponse = await api.budgets.getBudgetById(budgetId);
-        const budgetData = budgetResponse.data.budget;
+        const planResponse = await api.plans.getPlanById(budgetId);
+        const budgetData = planResponse.data.plan;
         const currencyCode = budgetData.currency_format?.iso_code || 'USD';
 
         // Get month summary if requested or current month
         const targetMonth = month || new Date().toISOString().slice(0, 7) + "-01";
-        const monthResponse = await api.months.getBudgetMonth(budgetId, targetMonth);
+        const monthResponse = await api.months.getPlanMonth(budgetId, targetMonth);
         const monthData = monthResponse.data.month;
 
         // Get accounts
@@ -98,9 +98,9 @@ export async function execute(input: ExecuteInput) {
         const api = getApiClient(profile);
         const budgetId = resolveBudgetId(budget, profile);
 
-        const response = await api.months.getBudgetMonths(budgetId);
-        const budgetResponse = await api.budgets.getBudgetById(budgetId);
-        const currencyCode = budgetResponse.data.budget.currency_format?.iso_code || 'USD';
+        const response = await api.months.getPlanMonths(budgetId);
+        const planResponse = await api.plans.getPlanById(budgetId);
+        const currencyCode = planResponse.data.plan.currency_format?.iso_code || 'USD';
 
         const months = response.data.months.map(m => ({
           month: m.month,
@@ -113,7 +113,7 @@ export async function execute(input: ExecuteInput) {
         }));
 
         return createResponse({
-          budget: budgetResponse.data.budget.name,
+          budget: planResponse.data.plan.name,
           currency: currencyCode,
           count: months.length,
           months

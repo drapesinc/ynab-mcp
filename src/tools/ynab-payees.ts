@@ -42,7 +42,7 @@ export async function execute(input: ExecuteInput) {
     const budgetId = resolveBudgetId(budget, profile);
 
     // Get budget name for response
-    const budgetResponse = await api.budgets.getBudgetById(budgetId);
+    const planResponse = await api.plans.getPlanById(budgetId);
 
     switch (action) {
       case "list": {
@@ -67,7 +67,7 @@ export async function execute(input: ExecuteInput) {
         }));
 
         return createResponse({
-          budget: budgetResponse.data.budget.name,
+          budget: planResponse.data.plan.name,
           count: formatted.length,
           payees: formatted
         });

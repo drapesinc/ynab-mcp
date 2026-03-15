@@ -41,8 +41,8 @@ export async function execute(input: ExecuteInput) {
     const budgetId = resolveBudgetId(budget, profile);
 
     // Get budget currency for formatting
-    const budgetResponse = await api.budgets.getBudgetById(budgetId);
-    const currencyCode = budgetResponse.data.budget.currency_format?.iso_code || 'USD';
+    const planResponse = await api.plans.getPlanById(budgetId);
+    const currencyCode = planResponse.data.plan.currency_format?.iso_code || 'USD';
 
     switch (action) {
       case "list": {
@@ -73,7 +73,7 @@ export async function execute(input: ExecuteInput) {
         }));
 
         return createResponse({
-          budget: budgetResponse.data.budget.name,
+          budget: planResponse.data.plan.name,
           currency: currencyCode,
           count: formatted.length,
           accounts: formatted
@@ -135,7 +135,7 @@ export async function execute(input: ExecuteInput) {
         });
 
         return createResponse({
-          budget: budgetResponse.data.budget.name,
+          budget: planResponse.data.plan.name,
           currency: currencyCode,
           netWorth: formatAmount(totalAssets - totalLiabilities, currencyCode),
           totalAssets: formatAmount(totalAssets, currencyCode),

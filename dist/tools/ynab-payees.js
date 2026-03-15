@@ -26,7 +26,7 @@ export async function execute(input) {
         const api = getApiClient(profile);
         const budgetId = resolveBudgetId(budget, profile);
         // Get budget name for response
-        const budgetResponse = await api.budgets.getBudgetById(budgetId);
+        const planResponse = await api.plans.getPlanById(budgetId);
         switch (action) {
             case "list": {
                 const response = await api.payees.getPayees(budgetId);
@@ -44,7 +44,7 @@ export async function execute(input) {
                     transferAccountId: p.transfer_account_id || null
                 }));
                 return createResponse({
-                    budget: budgetResponse.data.budget.name,
+                    budget: planResponse.data.plan.name,
                     count: formatted.length,
                     payees: formatted
                 });

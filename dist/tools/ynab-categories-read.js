@@ -24,8 +24,8 @@ export async function execute(input) {
         const api = getApiClient(profile);
         const budgetId = resolveBudgetId(budget, profile);
         // Get budget currency
-        const budgetResponse = await api.budgets.getBudgetById(budgetId);
-        const currencyCode = budgetResponse.data.budget.currency_format?.iso_code || 'USD';
+        const planResponse = await api.plans.getPlanById(budgetId);
+        const currencyCode = planResponse.data.plan.currency_format?.iso_code || 'USD';
         const targetMonth = month || new Date().toISOString().slice(0, 7) + "-01";
         switch (action) {
             case "list": {
@@ -64,7 +64,7 @@ export async function execute(input) {
                     }
                 }
                 return createResponse({
-                    budget: budgetResponse.data.budget.name,
+                    budget: planResponse.data.plan.name,
                     currency: currencyCode,
                     totals: {
                         budgeted: formatAmount(totalBudgeted, currencyCode),
@@ -82,7 +82,7 @@ export async function execute(input) {
                 const response = await api.categories.getMonthCategoryById(budgetId, targetMonth, categoryId);
                 const c = response.data.category;
                 return createResponse({
-                    budget: budgetResponse.data.budget.name,
+                    budget: planResponse.data.plan.name,
                     month: targetMonth,
                     currency: currencyCode,
                     category: {

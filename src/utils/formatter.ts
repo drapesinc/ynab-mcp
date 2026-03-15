@@ -200,6 +200,7 @@ export interface FormattedTransaction {
   memo: string;
   status: string;
   account: string;
+  flag_name: string | null;
 }
 
 export function formatTransaction(
@@ -213,6 +214,7 @@ export function formatTransaction(
     cleared: string;
     approved: boolean;
     account_name: string;
+    flag_name?: string | null;
   },
   currencyCode = 'USD'
 ): FormattedTransaction {
@@ -225,5 +227,6 @@ export function formatTransaction(
     memo: tx.memo || '',
     status: formatStatus(tx.cleared, tx.approved),
     account: tx.account_name,
+    flag_name: tx.flag_name || null,
   };
 }

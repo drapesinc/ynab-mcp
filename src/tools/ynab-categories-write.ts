@@ -1,27 +1,34 @@
 /**
  * ynab_categories_write - Category mutation operations
- * Actions: update, move
+ * Actions: create, create_group, update, move
  */
 
 import { z } from "zod";
+import * as ynab from "ynab";
 import { getApiClient, resolveBudgetId } from "../utils/profile-manager.js";
 import { resolveCategoryId } from "../utils/resolver.js";
 import { formatAmount, dollarsToMilliunits, createResponse, createErrorResponse } from "../utils/formatter.js";
 
 export const name = "ynab_categories_write";
 export const description = `Category mutation operations for YNAB. Actions:
+- create: Create a new category in an existing group
+- create_group: Create a new category group
 - update: Set budgeted amount for a category in a specific month
 - move: Move funds between categories`;
 
 export const inputSchema = {
-  action: z.enum(["update", "move"]).describe("Action to perform"),
+  action: z.enum(["create", "create_group", "update", "move"]).describe("Action to perform"),
   profile: z.string().optional().describe("Profile name (optional, uses default)"),
   budget: z.string().optional().describe("Budget alias or ID (optional, uses default)"),
   category: z.string().optional().describe("Category name or ID (for 'update' action)"),
   from_category: z.string().optional().describe("Source category name or ID (for 'move' action)"),
   to_category: z.string().optional().describe("Target category name or ID (for 'move' action)"),
   amount: z.number().optional().describe("Amount in dollars"),
-  month: z.string().optional().describe("Month in YYYY-MM-DD format (defaults to current month)")
+  month: z.string().optional().describe("Month in YYYY-MM-DD format (defaults to current month)"),
+  name: z.string().optional().describe("Name for new category or category group (for 'create' and 'create_group' actions)"),
+  group: z.string().optional().describe("Category group name or ID to add the new category to (for 'create' action)"),
+  goal_target: z.number().optional().describe("Goal target amount in dollars (for 'create' action)"),
+  goal_target_date: z.string().optional().describe("Goal target date in YYYY-MM-DD format (for 'create' action)")
 };
 
 interface ExecuteInput {
@@ -33,22 +40,99 @@ interface ExecuteInput {
   to_category?: string;
   amount?: number;
   month?: string;
+  name?: string;
+  group?: string;
+  goal_target?: number;
+  goal_target_date?: string;
 }
 
 export async function execute(input: ExecuteInput) {
   try {
-    const { action, profile, budget, category, from_category, to_category, amount, month } = input;
+    const { action, profile, budget, category, from_category, to_category, amount, month, name: categoryName, group, goal_target, goal_target_date } = input;
 
     const api = getApiClient(profile);
     const budgetId = resolveBudgetId(budget, profile);
 
     // Get budget currency
-    const budgetResponse = await api.budgets.getBudgetById(budgetId);
-    const currencyCode = budgetResponse.data.budget.currency_format?.iso_code || 'USD';
+    const planResponse = await api.plans.getPlanById(budgetId);
+    const currencyCode = planResponse.data.plan.currency_format?.iso_code || 'USD';
 
     const targetMonth = month || new Date().toISOString().slice(0, 7) + "-01";
 
     switch (action) {
+      case "create": {
+        if (!categoryName) {
+          return createErrorResponse("'name' is required for 'create' action");
+        }
+        if (!group) {
+          return createErrorResponse("'group' is required for 'create' action (category group name or ID)");
+        }
+
+        // Resolve group to ID - check if it's already an ID
+        let groupId = group;
+        if (!group.includes('-') || group.length < 30) {
+          // It's a name, need to find it
+          const categoriesResponse = await api.categories.getCategories(budgetId);
+          const matchedGroup = categoriesResponse.data.category_groups.find(
+            g => g.name.toLowerCase() === group.toLowerCase()
+          );
+          if (!matchedGroup) {
+            return createErrorResponse(`Category group '${group}' not found`);
+          }
+          groupId = matchedGroup.id;
+        }
+
+        const newCategory: ynab.NewCategory = {
+          name: categoryName,
+          category_group_id: groupId,
+        };
+
+        if (goal_target !== undefined) {
+          newCategory.goal_target = dollarsToMilliunits(goal_target);
+        }
+
+        if (goal_target_date) {
+          newCategory.goal_target_date = goal_target_date;
+        }
+
+        const response = await api.categories.createCategory(budgetId, { category: newCategory });
+        const created = response.data.category;
+
+        return createResponse({
+          success: true,
+          message: "Category created",
+          category: {
+            id: created.id,
+            name: created.name,
+            budgeted: formatAmount(created.budgeted, currencyCode),
+            activity: formatAmount(created.activity, currencyCode),
+            balance: formatAmount(created.balance, currencyCode)
+          }
+        });
+      }
+
+      case "create_group": {
+        if (!categoryName) {
+          return createErrorResponse("'name' is required for 'create_group' action");
+        }
+
+        const response = await api.categories.createCategoryGroup(budgetId, {
+          category_group: { name: categoryName }
+        });
+        const created = response.data.category_group;
+
+        return createResponse({
+          success: true,
+          message: "Category group created",
+          category_group: {
+            id: created.id,
+            name: created.name,
+            hidden: created.hidden,
+            deleted: created.deleted
+          }
+        });
+      }
+
       case "update": {
         if (!category) {
           return createErrorResponse("'category' is required for 'update' action");
@@ -141,7 +225,7 @@ export async function execute(input: ExecuteInput) {
       }
 
       default:
-        return createErrorResponse(`Unknown action: ${action}. Use: update, move`);
+        return createErrorResponse(`Unknown action: ${action}. Use: create, create_group, update, move`);
     }
   } catch (error) {
     console.error("Error in ynab_categories_write:", error);

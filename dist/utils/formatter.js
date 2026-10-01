@@ -121,11 +121,15 @@ export function createResponse(data) {
     };
 }
 /**
- * Create MCP error response
+ * Create MCP error response.
+ *
+ * `isError: true` tells the client the call failed (MCP spec), so a failed
+ * write is never shown as a success. Ported from upstream 4cb1051.
  */
 export function createErrorResponse(message) {
     return {
-        content: [{ type: 'text', text: `Error: ${message}` }]
+        content: [{ type: 'text', text: `Error: ${message}` }],
+        isError: true,
     };
 }
 export function formatBudgetSummary(budget, month, accounts, currencyCode = 'USD') {

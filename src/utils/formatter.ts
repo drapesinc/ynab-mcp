@@ -134,11 +134,15 @@ export function createResponse(data: unknown): { content: Array<{ type: 'text'; 
 }
 
 /**
- * Create MCP error response
+ * Create MCP error response.
+ *
+ * `isError: true` tells the client the call failed (MCP spec), so a failed
+ * write is never shown as a success. Ported from upstream 4cb1051.
  */
-export function createErrorResponse(message: string): { content: Array<{ type: 'text'; text: string }> } {
+export function createErrorResponse(message: string): { content: Array<{ type: 'text'; text: string }>; isError: true } {
   return {
-    content: [{ type: 'text' as const, text: `Error: ${message}` }]
+    content: [{ type: 'text' as const, text: `Error: ${message}` }],
+    isError: true,
   };
 }
 

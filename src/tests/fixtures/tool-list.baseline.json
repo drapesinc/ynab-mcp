@@ -1,0 +1,556 @@
+{
+  "serverInfo": {
+    "name": "ynab-mcp",
+    "version": "2.0.0"
+  },
+  "tools": [
+    {
+      "name": "ynab_accounts",
+      "title": "YNAB Accounts",
+      "description": "Account read operations for YNAB. Actions:\n- list: List accounts with optional filters (type, on_budget, closed)\n- get: Get single account details\n- balances: Quick balance summary for all/filtered accounts",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "list",
+              "get",
+              "balances"
+            ],
+            "description": "Action to perform"
+          },
+          "profile": {
+            "type": "string",
+            "description": "Profile name (optional, uses default)"
+          },
+          "budget": {
+            "type": "string",
+            "description": "Budget alias or ID (optional, uses default)"
+          },
+          "account": {
+            "type": "string",
+            "description": "Account name or ID (for 'get' action)"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "checking",
+              "savings",
+              "cash",
+              "creditCard",
+              "lineOfCredit",
+              "otherAsset",
+              "otherLiability",
+              "mortgage",
+              "autoLoan",
+              "studentLoan",
+              "personalLoan",
+              "medicalDebt",
+              "otherDebt"
+            ],
+            "description": "Filter by account type"
+          },
+          "on_budget": {
+            "type": "boolean",
+            "description": "Filter: true for budget accounts, false for tracking"
+          },
+          "include_closed": {
+            "type": "boolean",
+            "description": "Include closed accounts (default: false)"
+          }
+        },
+        "required": [
+          "action"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "ynab_accounts_write",
+      "title": "YNAB Accounts (Write)",
+      "description": "Account mutation operations for YNAB. Actions:\n- create: Create a new account\n- reconcile: Mark account as reconciled (creates adjustment if needed)",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "create",
+              "reconcile"
+            ],
+            "description": "Action to perform"
+          },
+          "profile": {
+            "type": "string",
+            "description": "Profile name (optional, uses default)"
+          },
+          "budget": {
+            "type": "string",
+            "description": "Budget alias or ID (optional, uses default)"
+          },
+          "account": {
+            "type": "string",
+            "description": "Account name or ID (for 'reconcile' action)"
+          },
+          "name": {
+            "type": "string",
+            "description": "Account name (for 'create' action)"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "checking",
+              "savings",
+              "cash",
+              "creditCard",
+              "lineOfCredit",
+              "otherAsset",
+              "otherLiability",
+              "mortgage",
+              "autoLoan",
+              "studentLoan",
+              "personalLoan",
+              "medicalDebt",
+              "otherDebt"
+            ],
+            "description": "Account type (for 'create' action)"
+          },
+          "balance": {
+            "type": "number",
+            "description": "Starting balance in dollars (for 'create') or target balance (for 'reconcile')"
+          },
+          "note": {
+            "type": "string",
+            "description": "Account note"
+          }
+        },
+        "required": [
+          "action"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "ynab_budgets",
+      "title": "YNAB Budgets",
+      "description": "Budget operations for YNAB. Actions:\n- list: List all budgets for profile\n- get: Get budget details with optional month summary\n- months: List all budget months with summaries\n- profiles: List configured profiles and their budgets",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "list",
+              "get",
+              "months",
+              "profiles"
+            ],
+            "description": "Action to perform"
+          },
+          "profile": {
+            "type": "string",
+            "description": "Profile name (optional, uses default)"
+          },
+          "budget": {
+            "type": "string",
+            "description": "Budget alias or ID (for 'get' action)"
+          },
+          "month": {
+            "type": "string",
+            "description": "Month in YYYY-MM-DD format (for 'get' action, defaults to current month)"
+          }
+        },
+        "required": [
+          "action"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "ynab_categories_read",
+      "title": "YNAB Categories (Read)",
+      "description": "Category query operations for YNAB. Actions:\n- list: List all categories grouped by category group\n- get: Get category budget details for specific month",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "list",
+              "get"
+            ],
+            "description": "Action to perform"
+          },
+          "profile": {
+            "type": "string",
+            "description": "Profile name (optional, uses default)"
+          },
+          "budget": {
+            "type": "string",
+            "description": "Budget alias or ID (optional, uses default)"
+          },
+          "category": {
+            "type": "string",
+            "description": "Category name or ID (for 'get' action)"
+          },
+          "month": {
+            "type": "string",
+            "description": "Month in YYYY-MM-DD format (defaults to current month)"
+          },
+          "include_hidden": {
+            "type": "boolean",
+            "description": "Include hidden categories (default: false)"
+          }
+        },
+        "required": [
+          "action"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "ynab_categories_write",
+      "title": "YNAB Categories (Write)",
+      "description": "Category mutation operations for YNAB. Actions:\n- create: Create a new category in an existing group\n- create_group: Create a new category group\n- update: Set budgeted amount for a category in a specific month\n- move: Move funds between categories",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "create",
+              "create_group",
+              "update",
+              "move"
+            ],
+            "description": "Action to perform"
+          },
+          "profile": {
+            "type": "string",
+            "description": "Profile name (optional, uses default)"
+          },
+          "budget": {
+            "type": "string",
+            "description": "Budget alias or ID (optional, uses default)"
+          },
+          "category": {
+            "type": "string",
+            "description": "Category name or ID (for 'update' action)"
+          },
+          "from_category": {
+            "type": "string",
+            "description": "Source category name or ID (for 'move' action)"
+          },
+          "to_category": {
+            "type": "string",
+            "description": "Target category name or ID (for 'move' action)"
+          },
+          "amount": {
+            "type": "number",
+            "description": "Amount in dollars"
+          },
+          "month": {
+            "type": "string",
+            "description": "Month in YYYY-MM-DD format (defaults to current month)"
+          },
+          "name": {
+            "type": "string",
+            "description": "Name for new category or category group (for 'create' and 'create_group' actions)"
+          },
+          "group": {
+            "type": "string",
+            "description": "Category group name or ID to add the new category to (for 'create' action)"
+          },
+          "goal_target": {
+            "type": "number",
+            "description": "Goal target amount in dollars (for 'create' action)"
+          },
+          "goal_target_date": {
+            "type": "string",
+            "description": "Goal target date in YYYY-MM-DD format (for 'create' action)"
+          }
+        },
+        "required": [
+          "action"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "ynab_payees",
+      "title": "YNAB Payees",
+      "description": "Payee operations for YNAB. Actions:\n- list: List all payees\n- get: Get payee details\n- update: Rename a payee",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "list",
+              "get",
+              "update"
+            ],
+            "description": "Action to perform"
+          },
+          "profile": {
+            "type": "string",
+            "description": "Profile name (optional, uses default)"
+          },
+          "budget": {
+            "type": "string",
+            "description": "Budget alias or ID (optional, uses default)"
+          },
+          "payee": {
+            "type": "string",
+            "description": "Payee name or ID (for 'get' and 'update' actions)"
+          },
+          "new_name": {
+            "type": "string",
+            "description": "New payee name (for 'update' action)"
+          },
+          "search": {
+            "type": "string",
+            "description": "Search term to filter payees (for 'list' action)"
+          },
+          "limit": {
+            "type": "number",
+            "description": "Maximum payees to return (default: 100)"
+          }
+        },
+        "required": [
+          "action"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "ynab_transactions_read",
+      "title": "YNAB Transactions (Read)",
+      "description": "Transaction query operations for YNAB. Actions:\n- list: Filter transactions by date, month, account, category, payee, status, amount\n- search: Fuzzy search by payee or memo\n- unapproved: Get pending/unapproved transactions\n- scheduled: List recurring/scheduled transactions",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "list",
+              "search",
+              "unapproved",
+              "scheduled"
+            ],
+            "description": "Action to perform"
+          },
+          "profile": {
+            "type": "string",
+            "description": "Profile name (optional, uses default)"
+          },
+          "budget": {
+            "type": "string",
+            "description": "Budget alias or ID (optional, uses default)"
+          },
+          "account": {
+            "type": "string",
+            "description": "Filter by account name or ID"
+          },
+          "category": {
+            "type": "string",
+            "description": "Filter by category name or ID"
+          },
+          "month": {
+            "type": "string",
+            "description": "Get transactions for a specific month (YYYY-MM-DD format, e.g. 2026-03-01). When provided, fetches via month-specific endpoint."
+          },
+          "since_date": {
+            "type": "string",
+            "description": "Start date (YYYY-MM-DD)"
+          },
+          "until_date": {
+            "type": "string",
+            "description": "End date (YYYY-MM-DD)"
+          },
+          "payee": {
+            "type": "string",
+            "description": "Filter by payee name (partial match)"
+          },
+          "memo": {
+            "type": "string",
+            "description": "Search memo field (partial match)"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "cleared",
+              "uncleared",
+              "reconciled"
+            ],
+            "description": "Filter by cleared status"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "unapproved",
+              "uncategorized"
+            ],
+            "description": "Filter by transaction type"
+          },
+          "min_amount": {
+            "type": "number",
+            "description": "Minimum amount in dollars (negative for outflows)"
+          },
+          "max_amount": {
+            "type": "number",
+            "description": "Maximum amount in dollars"
+          },
+          "limit": {
+            "type": "number",
+            "description": "Maximum transactions to return (default: 50)"
+          }
+        },
+        "required": [
+          "action"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "ynab_transactions_write",
+      "title": "YNAB Transactions (Write)",
+      "description": "Transaction mutation operations for YNAB. Actions:\n- create: Create transaction (with optional split support)\n- update: Update existing transaction\n- delete: Delete transaction\n- approve: Approve or unapprove transaction\n- bulk_approve: Approve multiple transactions at once\n- adjust: Create balance adjustment for tracking accounts\n- import: Trigger import from linked financial institutions\n- create_scheduled: Create a scheduled/recurring transaction\n- update_scheduled: Update an existing scheduled transaction\n- delete_scheduled: Delete a scheduled transaction",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "create",
+              "update",
+              "delete",
+              "approve",
+              "bulk_approve",
+              "adjust",
+              "import",
+              "create_scheduled",
+              "update_scheduled",
+              "delete_scheduled"
+            ],
+            "description": "Action to perform"
+          },
+          "profile": {
+            "type": "string",
+            "description": "Profile name (optional, uses default)"
+          },
+          "budget": {
+            "type": "string",
+            "description": "Budget alias or ID (optional, uses default)"
+          },
+          "account": {
+            "type": "string",
+            "description": "Account name or ID"
+          },
+          "transaction_id": {
+            "type": "string",
+            "description": "Transaction ID (for update, delete, approve) or scheduled transaction ID (for update_scheduled, delete_scheduled)"
+          },
+          "amount": {
+            "type": "number",
+            "description": "Amount in dollars (negative = outflow, positive = inflow)"
+          },
+          "payee": {
+            "type": "string",
+            "description": "Payee name or ID"
+          },
+          "category": {
+            "type": "string",
+            "description": "Category name or ID"
+          },
+          "memo": {
+            "type": "string",
+            "description": "Transaction memo"
+          },
+          "date": {
+            "type": "string",
+            "description": "Transaction date (YYYY-MM-DD, defaults to today)"
+          },
+          "cleared": {
+            "type": "string",
+            "enum": [
+              "cleared",
+              "uncleared",
+              "reconciled"
+            ],
+            "description": "Cleared status"
+          },
+          "approved": {
+            "type": "boolean",
+            "description": "Approval status (for approve action)"
+          },
+          "splits": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "amount": {
+                  "type": "number",
+                  "description": "Split amount in dollars"
+                },
+                "category": {
+                  "type": "string",
+                  "description": "Category name or ID"
+                },
+                "memo": {
+                  "type": "string",
+                  "description": "Split memo"
+                }
+              },
+              "required": [
+                "amount",
+                "category"
+              ],
+              "additionalProperties": false
+            },
+            "description": "Split transaction categories"
+          },
+          "transaction_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Array of transaction IDs (for bulk_approve)"
+          },
+          "frequency": {
+            "type": "string",
+            "enum": [
+              "never",
+              "daily",
+              "weekly",
+              "everyOtherWeek",
+              "twiceAMonth",
+              "every4Weeks",
+              "monthly",
+              "everyOtherMonth",
+              "every3Months",
+              "every4Months",
+              "twiceAYear",
+              "yearly",
+              "everyOtherYear"
+            ],
+            "description": "Frequency for scheduled transactions"
+          }
+        },
+        "required": [
+          "action"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    }
+  ]
+}

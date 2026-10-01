@@ -147,7 +147,29 @@ export function formatBudgetSummary(budget, month, accounts, currencyCode = 'USD
         })),
     };
 }
+/**
+ * Format the legs of a split transaction.
+ *
+ * YNAB reports a split's parent row with the category "Split" and keeps the
+ * real categories on its subtransactions; without them a split reads as one
+ * uncategorized charge. Deleted legs are dropped. Returns undefined for an
+ * ordinary transaction so the field is simply absent.
+ * Ported from upstream c70658f.
+ */
+export function formatSubtransactions(subtransactions, currencyCode = 'USD') {
+    const active = (subtransactions ?? []).filter(sub => !sub.deleted);
+    if (active.length === 0) {
+        return undefined;
+    }
+    return active.map(sub => ({
+        amount: formatAmount(sub.amount, currencyCode),
+        category: sub.category_name || 'Uncategorized',
+        memo: sub.memo || '',
+        ...(sub.payee_name ? { payee: sub.payee_name } : {}),
+    }));
+}
 export function formatTransaction(tx, currencyCode = 'USD') {
+    const subtransactions = formatSubtransactions(tx.subtransactions, currencyCode);
     return {
         id: tx.id,
         date: tx.date,
@@ -158,5 +180,6 @@ export function formatTransaction(tx, currencyCode = 'USD') {
         status: formatStatus(tx.cleared, tx.approved),
         account: tx.account_name,
         flag_name: tx.flag_name || null,
+        ...(subtransactions ? { subtransactions } : {}),
     };
 }

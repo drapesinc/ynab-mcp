@@ -205,6 +205,49 @@ export interface FormattedTransaction {
   status: string;
   account: string;
   flag_name: string | null;
+  /** Present only on split transactions (see formatSubtransactions). */
+  subtransactions?: FormattedSubtransaction[];
+}
+
+/** One leg of a split transaction. */
+export interface FormattedSubtransaction {
+  amount: string;
+  category: string;
+  memo: string;
+  /** Only when the leg has its own payee (e.g. a transfer leg). */
+  payee?: string;
+}
+
+/**
+ * Format the legs of a split transaction.
+ *
+ * YNAB reports a split's parent row with the category "Split" and keeps the
+ * real categories on its subtransactions; without them a split reads as one
+ * uncategorized charge. Deleted legs are dropped. Returns undefined for an
+ * ordinary transaction so the field is simply absent.
+ * Ported from upstream c70658f.
+ */
+export function formatSubtransactions(
+  subtransactions: Array<{
+    amount: number;
+    category_name?: string | null;
+    payee_name?: string | null;
+    memo?: string | null;
+    deleted: boolean;
+  }> | undefined,
+  currencyCode = 'USD'
+): FormattedSubtransaction[] | undefined {
+  const active = (subtransactions ?? []).filter(sub => !sub.deleted);
+  if (active.length === 0) {
+    return undefined;
+  }
+
+  return active.map(sub => ({
+    amount: formatAmount(sub.amount, currencyCode),
+    category: sub.category_name || 'Uncategorized',
+    memo: sub.memo || '',
+    ...(sub.payee_name ? { payee: sub.payee_name } : {}),
+  }));
 }
 
 export function formatTransaction(
@@ -219,9 +262,11 @@ export function formatTransaction(
     approved: boolean;
     account_name: string;
     flag_name?: string | null;
+    subtransactions?: Parameters<typeof formatSubtransactions>[0];
   },
   currencyCode = 'USD'
 ): FormattedTransaction {
+  const subtransactions = formatSubtransactions(tx.subtransactions, currencyCode);
   return {
     id: tx.id,
     date: tx.date,
@@ -232,5 +277,6 @@ export function formatTransaction(
     status: formatStatus(tx.cleared, tx.approved),
     account: tx.account_name,
     flag_name: tx.flag_name || null,
+    ...(subtransactions ? { subtransactions } : {}),
   };
 }

@@ -1,0 +1,10 @@
+# Upstream port proposal (not built; each item needs Yaw's OK)
+
+Ported 2026-10-01: `isError: true` on failures (upstream 4cb1051) and split-transaction legs (c70658f). The items below would change the fork's tool schemas or need a decision.
+
+1. **ynab SDK 4.0.0 → 4.5.0.** The API can only create 6 account types (checking, savings, cash, creditCard, otherAsset, otherLiability), so the `type` enum on `ynab_accounts_write` `create` would shrink from 13 to 6, dropping lineOfCredit, mortgage, autoLoan, studentLoan, personalLoan, medicalDebt, otherDebt. The `ynab_accounts` read filter keeps all 13. **Question for Yaw: remove those 7 from `create`, or keep them and return an error that lists the 6 allowed types?**
+2. **Move money.** The fork already has `ynab_categories_write` `move`. Port only upstream's partial-failure report (says which category was changed if the second write fails). No schema change.
+3. **Auto-assign.** New `ynab_categories_write` action `auto_assign` plus two new optional params: `dry_run` (boolean) and `max_total` (dollars). Fills underfunded goals from Ready to Assign, biggest gap first.
+4. **Spending reports.** New `ynab_transactions_read` actions `spending_by_category`, `spending_by_payee`, `cash_flow`. They reuse `since_date`, `until_date`, `limit`; one new optional param `months` (number) for `cash_flow`. Splits counted by leg, transfers left out.
+5. **Category suggestions (preview + guarded apply).** New actions `suggest_categories` and `apply_category_suggestions` (on `ynab_transactions_write`, or a new 9th tool), with `suggestions[{transaction_id, category_id, expected_content_fingerprint}]` and `dry_run`. Upstream's AI mode sends payee and memo text to TypeSafe, a third party (opt-in env `YNAB_AI_CATEGORIZATION` + `TYPESAFE_API_KEY`). Suggest: history-based suggestions only, no TypeSafe.
+6. **Error detail (no schema change).** YNAB API errors reach the caller as `Error: [object Object]` because the SDK throws a plain object. Port upstream's `getErrorMessage` so YNAB's own message shows. Pinned today in `src/tests/transactions-write.test.ts`.

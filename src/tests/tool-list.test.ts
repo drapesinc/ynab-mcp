@@ -52,6 +52,7 @@ describe("tool list", () => {
       (tools.find((t) => t.name === name)!.inputSchema as any).properties.action.enum;
 
     expect(actions("ynab_transactions_write")).toContain("adjust");
+    expect(actions("ynab_categories_write")).toEqual(["create", "create_group", "update", "move", "auto_assign"]);
     expect(actions("ynab_accounts_write")).toEqual(["create", "reconcile"]);
     expect(actions("ynab_budgets")).toEqual(["list", "get", "months", "profiles"]);
   });

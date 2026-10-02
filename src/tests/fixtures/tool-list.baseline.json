@@ -216,7 +216,7 @@
     {
       "name": "ynab_categories_write",
       "title": "YNAB Categories (Write)",
-      "description": "Category mutation operations for YNAB. Actions:\n- create: Create a new category in an existing group\n- create_group: Create a new category group\n- update: Set budgeted amount for a category in a specific month\n- move: Move funds between categories",
+      "description": "Category mutation operations for YNAB. Actions:\n- create: Create a new category in an existing group\n- create_group: Create a new category group\n- update: Set budgeted amount for a category in a specific month\n- move: Move funds between categories\n- auto_assign: Fill underfunded goals from Ready to Assign, biggest gap first. Never exceeds max_total or Ready to Assign. Preview only unless dry_run is explicitly false (it moves money)",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -226,7 +226,8 @@
               "create",
               "create_group",
               "update",
-              "move"
+              "move",
+              "auto_assign"
             ],
             "description": "Action to perform"
           },
@@ -273,6 +274,14 @@
           "goal_target_date": {
             "type": "string",
             "description": "Goal target date in YYYY-MM-DD format (for 'create' action)"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "description": "For 'auto_assign': preview only (default true). Set false to actually assign."
+          },
+          "max_total": {
+            "type": "number",
+            "description": "For 'auto_assign': maximum total to assign, in dollars"
           }
         },
         "required": [

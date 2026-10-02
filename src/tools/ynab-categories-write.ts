@@ -1,6 +1,6 @@
 /**
  * ynab_categories_write - Category mutation operations
- * Actions: create, create_group, update, move
+ * Actions: create, create_group, update, move, auto_assign
  */
 
 import { z } from "zod";
@@ -14,10 +14,11 @@ export const description = `Category mutation operations for YNAB. Actions:
 - create: Create a new category in an existing group
 - create_group: Create a new category group
 - update: Set budgeted amount for a category in a specific month
-- move: Move funds between categories`;
+- move: Move funds between categories
+- auto_assign: Fill underfunded goals from Ready to Assign, biggest gap first. Never exceeds max_total or Ready to Assign. Preview only unless dry_run is explicitly false (it moves money)`;
 
 export const inputSchema = {
-  action: z.enum(["create", "create_group", "update", "move"]).describe("Action to perform"),
+  action: z.enum(["create", "create_group", "update", "move", "auto_assign"]).describe("Action to perform"),
   profile: z.string().optional().describe("Profile name (optional, uses default)"),
   budget: z.string().optional().describe("Budget alias or ID (optional, uses default)"),
   category: z.string().optional().describe("Category name or ID (for 'update' action)"),
@@ -28,7 +29,9 @@ export const inputSchema = {
   name: z.string().optional().describe("Name for new category or category group (for 'create' and 'create_group' actions)"),
   group: z.string().optional().describe("Category group name or ID to add the new category to (for 'create' action)"),
   goal_target: z.number().optional().describe("Goal target amount in dollars (for 'create' action)"),
-  goal_target_date: z.string().optional().describe("Goal target date in YYYY-MM-DD format (for 'create' action)")
+  goal_target_date: z.string().optional().describe("Goal target date in YYYY-MM-DD format (for 'create' action)"),
+  dry_run: z.boolean().optional().describe("For 'auto_assign': preview only (default true). Set false to actually assign."),
+  max_total: z.number().optional().describe("For 'auto_assign': maximum total to assign, in dollars")
 };
 
 interface ExecuteInput {
@@ -44,11 +47,13 @@ interface ExecuteInput {
   group?: string;
   goal_target?: number;
   goal_target_date?: string;
+  dry_run?: boolean;
+  max_total?: number;
 }
 
 export async function execute(input: ExecuteInput) {
   try {
-    const { action, profile, budget, category, from_category, to_category, amount, month, name: categoryName, group, goal_target, goal_target_date } = input;
+    const { action, profile, budget, category, from_category, to_category, amount, month, name: categoryName, group, goal_target, goal_target_date, dry_run, max_total } = input;
 
     const api = getApiClient(profile);
     const budgetId = resolveBudgetId(budget, profile);
@@ -195,15 +200,24 @@ export async function execute(input: ExecuteInput) {
           );
         }
 
-        // Update both categories
-        const [updatedFrom, updatedTo] = await Promise.all([
-          api.categories.updateMonthCategory(budgetId, targetMonth, fromCategoryId, {
-            category: { budgeted: fromCurrent - milliunits }
-          }),
-          api.categories.updateMonthCategory(budgetId, targetMonth, toCategoryId, {
+        // Write one side at a time so a failure on the second write can say
+        // exactly which category was already changed.
+        const updatedFrom = await api.categories.updateMonthCategory(budgetId, targetMonth, fromCategoryId, {
+          category: { budgeted: fromCurrent - milliunits }
+        });
+        let updatedTo;
+        try {
+          updatedTo = await api.categories.updateMonthCategory(budgetId, targetMonth, toCategoryId, {
             category: { budgeted: toCurrent + milliunits }
-          })
-        ]);
+          });
+        } catch (error) {
+          return createErrorResponse(
+            `Partial failure: '${from_category}' was reduced by ${formatAmount(milliunits, currencyCode)} ` +
+            `(budgeted now ${formatAmount(updatedFrom.data.category.budgeted, currencyCode)}) but '${to_category}' was NOT increased: ` +
+            `${getErrorMessage(error)}. Budgeted for '${from_category}' was ${formatAmount(fromCurrent, currencyCode)} before; ` +
+            `restore it or assign ${formatAmount(milliunits, currencyCode)} to '${to_category}' to finish the move.`
+          );
+        }
 
         return createResponse({
           success: true,
@@ -224,8 +238,92 @@ export async function execute(input: ExecuteInput) {
         });
       }
 
+      case "auto_assign": {
+        // Moves money, so it only writes when dry_run is explicitly false.
+        const isDryRun = dry_run !== false;
+        if (max_total !== undefined && max_total <= 0) {
+          return createErrorResponse("'max_total' must be a positive number for 'auto_assign' action");
+        }
+
+        const monthResponse = await api.months.getPlanMonth(budgetId, targetMonth);
+        const readyToAssign = monthResponse.data.month.to_be_budgeted;
+        const cap = Math.min(
+          Math.max(readyToAssign, 0),
+          max_total !== undefined ? dollarsToMilliunits(max_total) : Infinity
+        );
+
+        const underfunded = monthResponse.data.month.categories
+          .filter(c => !c.deleted && !c.hidden && (c.goal_under_funded ?? 0) > 0)
+          .sort((a, b) => (b.goal_under_funded ?? 0) - (a.goal_under_funded ?? 0));
+
+        let remaining = cap;
+        const plan: Array<{ id: string; name: string; budgeted: number; gap: number; assign: number }> = [];
+        for (const c of underfunded) {
+          if (remaining <= 0) break;
+          const gap = c.goal_under_funded ?? 0;
+          const assign = Math.min(gap, remaining);
+          plan.push({ id: c.id, name: c.name, budgeted: c.budgeted, gap, assign });
+          remaining -= assign;
+        }
+        const totalAssigned = plan.reduce((sum, p) => sum + p.assign, 0);
+
+        const summary = (p: typeof plan[number]) => ({
+          name: p.name,
+          gap: formatAmount(p.gap, currencyCode),
+          assigned: formatAmount(p.assign, currencyCode),
+          previousBudgeted: formatAmount(p.budgeted, currencyCode),
+          newBudgeted: formatAmount(p.budgeted + p.assign, currencyCode),
+        });
+
+        if (isDryRun) {
+          return createResponse({
+            success: true,
+            dry_run: true,
+            message: plan.length === 0
+              ? "Nothing to assign"
+              : `Would assign ${formatAmount(totalAssigned, currencyCode)} across ${plan.length} categories. Nothing was written; pass dry_run: false to apply.`,
+            month: targetMonth,
+            readyToAssign: formatAmount(readyToAssign, currencyCode),
+            maxTotal: max_total !== undefined ? formatAmount(dollarsToMilliunits(max_total), currencyCode) : null,
+            totalAssigned: formatAmount(totalAssigned, currencyCode),
+            readyToAssignAfter: formatAmount(readyToAssign - totalAssigned, currencyCode),
+            assignments: plan.map(summary)
+          });
+        }
+
+        const applied: typeof plan = [];
+        for (const p of plan) {
+          try {
+            await api.categories.updateMonthCategory(budgetId, targetMonth, p.id, {
+              category: { budgeted: p.budgeted + p.assign }
+            });
+            applied.push(p);
+          } catch (error) {
+            const done = applied.map(a => `'${a.name}' (+${formatAmount(a.assign, currencyCode)})`).join(", ") || "none";
+            return createErrorResponse(
+              `Partial failure while assigning '${p.name}': ${getErrorMessage(error)}. ` +
+              `Already assigned: ${done}. Not attempted or failed: ${plan.slice(applied.length).map(x => `'${x.name}'`).join(", ")}.`
+            );
+          }
+        }
+
+        const appliedTotal = applied.reduce((sum, p) => sum + p.assign, 0);
+        return createResponse({
+          success: true,
+          dry_run: false,
+          message: applied.length === 0
+            ? "Nothing to assign"
+            : `Assigned ${formatAmount(appliedTotal, currencyCode)} across ${applied.length} categories`,
+          month: targetMonth,
+          readyToAssign: formatAmount(readyToAssign, currencyCode),
+          totalAssigned: formatAmount(appliedTotal, currencyCode),
+          readyToAssignAfter: formatAmount(readyToAssign - appliedTotal, currencyCode),
+          assignments: applied.map(summary)
+        });
+      }
+
       default:
-        return createErrorResponse(`Unknown action: ${action}. Use: create, create_group, update, move`);
+        return createErrorResponse(`Unknown action: ${action}. Use: create, create_group, update, move, auto_assign`);
     }
   } catch (error) {
     console.error("Error in ynab_categories_write:", error);

@@ -129,8 +129,8 @@ export function getErrorMessage(error) {
         const inner = e.error && typeof e.error === 'object' ? e.error : e;
         const detail = inner.detail ?? inner.message;
         if (typeof detail === 'string' && detail) {
-            const label = inner.name ?? inner.id;
-            return label && label !== detail ? `${detail} (${inner.id ? inner.id + ' ' : ''}${inner.name ?? ''})`.replace(/ \)$/, ')') : detail;
+            const code = [inner.id, inner.name].filter((x) => typeof x === 'string' && x).join(' ');
+            return code ? `${detail} (${code})` : detail;
         }
         try {
             return JSON.stringify(error);

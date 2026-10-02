@@ -7,7 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `ynab_categories_write` `auto_assign` action with optional `dry_run` (default true; writes only when explicitly false) and `max_total` (dollars). Fills underfunded goals from Ready to Assign, biggest gap first, never exceeding `max_total` or Ready to Assign.
+
 ### Changed
+- `ynab_categories_write` `move` now writes the two categories one after the other and, if the second write fails, reports which category was already changed.
 - Upgraded the `ynab` SDK from 4.0.0 to 4.5.0.
 - `ynab_accounts_write` `create` now returns a clear error listing the 6 types the YNAB API can create (checking, savings, cash, creditCard, otherAsset, otherLiability) when another type is passed. The `type` enum still lists all 13 values, and the `ynab_accounts` read filter keeps all 13.
 

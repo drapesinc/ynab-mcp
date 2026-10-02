@@ -178,9 +178,10 @@ Category mutation operations.
 | Action | Description |
 |--------|-------------|
 | `update` | Set the budgeted amount for a category in a specific month |
-| `move` | Move funds between categories (validates sufficient funds) |
+| `move` | Move funds between categories (validates sufficient funds; if the second write fails, the error says which category was already changed) |
+| `auto_assign` | Fill underfunded goals from Ready to Assign, biggest gap first, never exceeding `max_total` or Ready to Assign. **Preview only by default**: it writes nothing unless `dry_run` is explicitly `false` |
 
-Parameters: `action`, `profile?`, `budget?`, `category?`, `from_category?`, `to_category?`, `amount?`, `month?`
+Parameters: `action`, `profile?`, `budget?`, `category?`, `from_category?`, `to_category?`, `amount?`, `month?`, `dry_run?`, `max_total?`
 
 #### `ynab_accounts_write`
 
@@ -265,6 +266,10 @@ ynab_categories_write({
   to_category: "Groceries",
   amount: 50
 })
+
+// Preview, then apply, auto-assigning Ready to Assign to underfunded goals (max $500)
+ynab_categories_write({ action: "auto_assign", max_total: 500 })
+ynab_categories_write({ action: "auto_assign", max_total: 500, dry_run: false })
 
 // Reconcile an account
 ynab_accounts_write({

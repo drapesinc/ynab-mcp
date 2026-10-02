@@ -136,10 +136,98 @@ describe("ynab_categories_write", () => {
     expect(h.fake.writes()).toHaveLength(0);
   });
 
+  it("move reports which category changed when the second write fails", async () => {
+    h.fake.failNext("PATCH", new RegExp(`/categories/${cat(4)}$`), 400, "budgeted is invalid");
+    const r = await h.call("ynab_categories_write", {
+      action: "move", from_category: "Groceries", to_category: "Household", amount: 25, month: "2026-09-01",
+    });
+    expect(r.isError).toBe(true);
+    expect(r.text).toContain("Partial failure: 'Groceries' was reduced by $25.00");
+    expect(r.text).toContain("'Household' was NOT increased: budgeted is invalid (400 bad_request)");
+    expect(r.text).toContain("Budgeted for 'Groceries' was $600.00 before");
+    expect(h.fake.writes()).toHaveLength(2);
+  });
+
   it("routes category writes to the chosen profile", async () => {
     await h.call("ynab_categories_write", { action: "update", profile: "kokuros", category: "Rent", amount: 1 });
     const [w] = h.fake.writes();
     expect(w.token).toBe(TOKENS.kokuros);
     expect(w.path).toBe(`/plans/${PLANS.kokuros}/months/2026-09-01/categories/${idFor(PLANS.kokuros, "cat", 1)}`);
+  });
+});
+
+describe("ynab_categories_write auto_assign", () => {
+  // September: Ready to Assign is $125.00. Give three categories a goal gap.
+  function underfund(gaps: Record<number, number>) {
+    const plan = h.fake.plan(CAD);
+    for (const g of plan.categoryGroups) {
+      for (const c of g.categories) {
+        for (const [n, gap] of Object.entries(gaps)) if (c.id === cat(Number(n))) c.goal_under_funded = gap;
+      }
+    }
+  }
+  const call = (extra: Record<string, unknown> = {}) =>
+    h.call("ynab_categories_write", { action: "auto_assign", month: "2026-09-01", ...extra });
+
+  it("defaults to a dry run and writes nothing", async () => {
+    underfund({ 1: 50_000, 2: 20_000 });
+    const r = await call();
+    expect(r.isError).toBeUndefined();
+    expect(r.json.dry_run).toBe(true);
+    expect(r.json.totalAssigned).toBe("$70.00");
+    expect(r.json.readyToAssignAfter).toBe("$55.00");
+    expect(h.fake.writes()).toHaveLength(0);
+  });
+
+  it("only writes when dry_run is explicitly false, biggest gap first", async () => {
+    underfund({ 2: 20_000, 4: 90_000, 1: 50_000 });
+    const r = await call({ dry_run: false });
+    expect(r.json.dry_run).toBe(false);
+    expect(r.json.assignments.map((a: any) => [a.name, a.assigned])).toEqual([
+      ["Household", "$90.00"], ["Rent", "$35.00"],
+    ]);
+    // Ready to Assign ($125) runs out after Household ($90) and part of Rent.
+    expect(h.fake.writes().map((w) => [w.path, w.body])).toEqual([
+      [`/plans/${CAD}/months/2026-09-01/categories/${cat(4)}`, { category: { budgeted: 190_000 } }],
+      [`/plans/${CAD}/months/2026-09-01/categories/${cat(1)}`, { category: { budgeted: 1_235_000 } }],
+    ]);
+    expect(r.json.readyToAssignAfter).toBe("$0.00");
+  });
+
+  it("never exceeds max_total", async () => {
+    underfund({ 4: 90_000, 1: 50_000 });
+    const r = await call({ dry_run: false, max_total: 100 });
+    expect(r.json.totalAssigned).toBe("$100.00");
+    expect(r.json.assignments.map((a: any) => a.assigned)).toEqual(["$90.00", "$10.00"]);
+    expect(h.fake.writes()).toHaveLength(2);
+  });
+
+  it("skips hidden categories and ones with no gap, and reports nothing to assign", async () => {
+    underfund({ 5: 40_000, 3: 0 });
+    const r = await call({ dry_run: false });
+    expect(r.json.message).toBe("Nothing to assign");
+    expect(h.fake.writes()).toHaveLength(0);
+  });
+
+  it("assigns nothing when Ready to Assign is zero", async () => {
+    underfund({ 1: 50_000 });
+    h.fake.plan(CAD).months[0].to_be_budgeted = 0;
+    const r = await call({ dry_run: false });
+    expect(r.json.assignments).toEqual([]);
+    expect(h.fake.writes()).toHaveLength(0);
+  });
+
+  it("rejects a non-positive max_total", async () => {
+    const r = await call({ max_total: 0 });
+    expect(r.text).toBe("Error: 'max_total' must be a positive number for 'auto_assign' action");
+  });
+
+  it("reports a partial failure with what was already assigned", async () => {
+    underfund({ 4: 90_000, 1: 20_000 });
+    h.fake.failNext("PATCH", new RegExp(`/categories/${cat(1)}$`), 400, "nope");
+    const r = await call({ dry_run: false });
+    expect(r.isError).toBe(true);
+    expect(r.text).toContain("Partial failure while assigning 'Rent': nope (400 bad_request)");
+    expect(r.text).toContain("Already assigned: 'Household' (+$90.00)");
   });
 });

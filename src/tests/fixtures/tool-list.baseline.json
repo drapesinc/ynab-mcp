@@ -439,7 +439,7 @@
     {
       "name": "ynab_transactions_write",
       "title": "YNAB Transactions (Write)",
-      "description": "Transaction mutation operations for YNAB. Actions:\n- create: Create transaction (with optional split support)\n- update: Update existing transaction\n- delete: Delete transaction\n- approve: Approve or unapprove transaction\n- bulk_approve: Approve multiple transactions at once\n- adjust: Create balance adjustment for tracking accounts\n- import: Trigger import from linked financial institutions\n- create_scheduled: Create a scheduled/recurring transaction\n- update_scheduled: Update an existing scheduled transaction\n- delete_scheduled: Delete a scheduled transaction",
+      "description": "Transaction mutation operations for YNAB. Actions:\n- create: Create transaction (with optional split support)\n- update: Update existing transaction\n- delete: Delete transaction\n- approve: Approve or unapprove transaction\n- bulk_approve: Approve multiple transactions at once\n- adjust: Create balance adjustment for tracking accounts\n- import: Trigger import from linked financial institutions\n- create_scheduled: Create a scheduled/recurring transaction\n- update_scheduled: Update an existing scheduled transaction\n- delete_scheduled: Delete a scheduled transaction\n- suggest_categories: Suggest categories for uncategorized transactions from your own history (most common category for the same payee). Read-only; no data leaves YNAB. Options: since_date, limit\n- apply_category_suggestions: Apply suggestions (suggestions[{transaction_id, category_id, expected_content_fingerprint}]). Preview only unless dry_run is explicitly false; skips any transaction that changed since it was suggested",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -455,7 +455,9 @@
               "import",
               "create_scheduled",
               "update_scheduled",
-              "delete_scheduled"
+              "delete_scheduled",
+              "suggest_categories",
+              "apply_category_suggestions"
             ],
             "description": "Action to perform"
           },
@@ -559,6 +561,45 @@
               "everyOtherYear"
             ],
             "description": "Frequency for scheduled transactions"
+          },
+          "since_date": {
+            "type": "string",
+            "description": "For 'suggest_categories': only suggest for transactions on or after this date (YYYY-MM-DD)"
+          },
+          "limit": {
+            "type": "number",
+            "description": "For 'suggest_categories': maximum suggestions to return (default: 50)"
+          },
+          "suggestions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "transaction_id": {
+                  "type": "string",
+                  "description": "Transaction ID"
+                },
+                "category_id": {
+                  "type": "string",
+                  "description": "Category ID to apply"
+                },
+                "expected_content_fingerprint": {
+                  "type": "string",
+                  "description": "Fingerprint returned by suggest_categories; the suggestion is skipped if the transaction changed since"
+                }
+              },
+              "required": [
+                "transaction_id",
+                "category_id",
+                "expected_content_fingerprint"
+              ],
+              "additionalProperties": false
+            },
+            "description": "Suggestions to apply (for 'apply_category_suggestions')"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "description": "For 'apply_category_suggestions': preview only (default true). Set false to write."
           }
         },
         "required": [

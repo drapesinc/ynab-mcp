@@ -1,12 +1,14 @@
 /**
  * ynab_transactions_write - Transaction mutation operations
- * Actions: create, update, delete, approve, adjust, create_scheduled, update_scheduled, delete_scheduled
+ * Actions: create, update, delete, approve, adjust, create_scheduled, update_scheduled, delete_scheduled, suggest_categories, apply_category_suggestions
  */
 import { z } from "zod";
 import * as ynab from "ynab";
 import { getApiClient, resolveBudgetId, getDefaultAccount } from "../utils/profile-manager.js";
 import { resolveAccountId, resolveCategoryId, resolvePayeeId } from "../utils/resolver.js";
-import { formatTransaction, dollarsToMilliunits, formatDate, createResponse, createErrorResponse, getErrorMessage } from "../utils/formatter.js";
+import { contentFingerprint } from "../utils/fingerprint.js";
+import { isInflowCategory } from "../utils/spending.js";
+import { formatAmount, formatTransaction, dollarsToMilliunits, formatDate, createResponse, createErrorResponse, getErrorMessage } from "../utils/formatter.js";
 export const name = "ynab_transactions_write";
 export const description = `Transaction mutation operations for YNAB. Actions:
 - create: Create transaction (with optional split support)
@@ -18,9 +20,11 @@ export const description = `Transaction mutation operations for YNAB. Actions:
 - import: Trigger import from linked financial institutions
 - create_scheduled: Create a scheduled/recurring transaction
 - update_scheduled: Update an existing scheduled transaction
-- delete_scheduled: Delete a scheduled transaction`;
+- delete_scheduled: Delete a scheduled transaction
+- suggest_categories: Suggest categories for uncategorized transactions from your own history (most common category for the same payee). Read-only; no data leaves YNAB. Options: since_date, limit
+- apply_category_suggestions: Apply suggestions (suggestions[{transaction_id, category_id, expected_content_fingerprint}]). Preview only unless dry_run is explicitly false; skips any transaction that changed since it was suggested`;
 export const inputSchema = {
-    action: z.enum(["create", "update", "delete", "approve", "bulk_approve", "adjust", "import", "create_scheduled", "update_scheduled", "delete_scheduled"]).describe("Action to perform"),
+    action: z.enum(["create", "update", "delete", "approve", "bulk_approve", "adjust", "import", "create_scheduled", "update_scheduled", "delete_scheduled", "suggest_categories", "apply_category_suggestions"]).describe("Action to perform"),
     profile: z.string().optional().describe("Profile name (optional, uses default)"),
     budget: z.string().optional().describe("Budget alias or ID (optional, uses default)"),
     account: z.string().optional().describe("Account name or ID"),
@@ -38,11 +42,19 @@ export const inputSchema = {
         memo: z.string().optional().describe("Split memo")
     })).optional().describe("Split transaction categories"),
     transaction_ids: z.array(z.string()).optional().describe("Array of transaction IDs (for bulk_approve)"),
-    frequency: z.enum(["never", "daily", "weekly", "everyOtherWeek", "twiceAMonth", "every4Weeks", "monthly", "everyOtherMonth", "every3Months", "every4Months", "twiceAYear", "yearly", "everyOtherYear"]).optional().describe("Frequency for scheduled transactions")
+    frequency: z.enum(["never", "daily", "weekly", "everyOtherWeek", "twiceAMonth", "every4Weeks", "monthly", "everyOtherMonth", "every3Months", "every4Months", "twiceAYear", "yearly", "everyOtherYear"]).optional().describe("Frequency for scheduled transactions"),
+    since_date: z.string().optional().describe("For 'suggest_categories': only suggest for transactions on or after this date (YYYY-MM-DD)"),
+    limit: z.number().optional().describe("For 'suggest_categories': maximum suggestions to return (default: 50)"),
+    suggestions: z.array(z.object({
+        transaction_id: z.string().describe("Transaction ID"),
+        category_id: z.string().describe("Category ID to apply"),
+        expected_content_fingerprint: z.string().describe("Fingerprint returned by suggest_categories; the suggestion is skipped if the transaction changed since")
+    })).optional().describe("Suggestions to apply (for 'apply_category_suggestions')"),
+    dry_run: z.boolean().optional().describe("For 'apply_category_suggestions': preview only (default true). Set false to write.")
 };
 export async function execute(input) {
     try {
-        const { action, profile, budget, account, transaction_id, amount, payee, category, memo, date, cleared, approved, splits, transaction_ids, frequency } = input;
+        const { action, profile, budget, account, transaction_id, amount, payee, category, memo, date, cleared, approved, splits, transaction_ids, frequency, since_date, limit = 50, suggestions, dry_run } = input;
         const api = getApiClient(profile);
         const budgetId = resolveBudgetId(budget, profile);
         // Get budget currency
@@ -397,8 +409,148 @@ export async function execute(input) {
                     transaction_id
                 });
             }
+            case "suggest_categories": {
+                // History-based only: the most common category used for the same payee.
+                const [txResponse, catResponse] = await Promise.all([
+                    api.transactions.getTransactions(budgetId),
+                    api.categories.getCategories(budgetId)
+                ]);
+                const usable = new Map(); // category id -> name
+                for (const g of catResponse.data.category_groups) {
+                    if (g.deleted || g.hidden)
+                        continue;
+                    for (const c of g.categories) {
+                        if (!c.deleted && !c.hidden)
+                            usable.set(c.id, c.name);
+                    }
+                }
+                const live = txResponse.data.transactions.filter(t => !t.deleted && !t.transfer_account_id);
+                const payeeKey = (t) => t.payee_name?.trim().toLowerCase() ?? "";
+                const history = new Map();
+                for (const t of live) {
+                    const key = payeeKey(t);
+                    const isSplit = (t.subtransactions ?? []).some(sub => !sub.deleted);
+                    if (!key || !t.category_id || isSplit || !usable.has(t.category_id))
+                        continue;
+                    if (isInflowCategory(t.category_name ?? ""))
+                        continue;
+                    const byCat = history.get(key) ?? new Map();
+                    const entry = byCat.get(t.category_id) ?? { count: 0, lastDate: "" };
+                    entry.count += 1;
+                    if (t.date > entry.lastDate)
+                        entry.lastDate = t.date;
+                    byCat.set(t.category_id, entry);
+                    history.set(key, byCat);
+                }
+                const candidates = live
+                    .filter(t => !t.category_id && payeeKey(t) && !(t.subtransactions ?? []).some(sub => !sub.deleted))
+                    .filter(t => !since_date || t.date >= since_date)
+                    .sort((a, b) => b.date.localeCompare(a.date));
+                const results = [];
+                let unmatched = 0;
+                for (const t of candidates) {
+                    const byCat = history.get(payeeKey(t));
+                    if (!byCat) {
+                        unmatched++;
+                        continue;
+                    }
+                    const ranked = [...byCat.entries()].sort((a, b) => b[1].count - a[1].count || b[1].lastDate.localeCompare(a[1].lastDate) || a[0].localeCompare(b[0]));
+                    const [categoryId, top] = ranked[0];
+                    const total = ranked.reduce((sum, [, v]) => sum + v.count, 0);
+                    results.push({
+                        transaction_id: t.id,
+                        date: t.date,
+                        payee: t.payee_name,
+                        amount: formatAmount(t.amount, currencyCode),
+                        suggested_category_id: categoryId,
+                        suggested_category: usable.get(categoryId),
+                        based_on: `${top.count} of ${total} past transactions for this payee`,
+                        expected_content_fingerprint: contentFingerprint(t)
+                    });
+                }
+                return createResponse({
+                    budget: planResponse.data.plan.name,
+                    currency: currencyCode,
+                    source: "history (most common category for the same payee)",
+                    uncategorized_checked: candidates.length,
+                    suggestion_count: Math.min(results.length, limit),
+                    without_history: unmatched,
+                    suggestions: results.slice(0, limit),
+                    note: "Nothing was changed. Review, then pass the suggestions you accept to apply_category_suggestions."
+                });
+            }
+            case "apply_category_suggestions": {
+                if (!suggestions || suggestions.length === 0) {
+                    return createErrorResponse("'suggestions' array is required for apply_category_suggestions action");
+                }
+                if (suggestions.length > 100) {
+                    return createErrorResponse("apply_category_suggestions accepts at most 100 suggestions per call");
+                }
+                // Writes only when dry_run is explicitly false.
+                const isDryRun = dry_run !== false;
+                const catResponse = await api.categories.getCategories(budgetId);
+                const usable = new Map();
+                for (const g of catResponse.data.category_groups) {
+                    for (const c of g.categories)
+                        if (!c.deleted)
+                            usable.set(c.id, c.name);
+                }
+                const ok = [];
+                const skipped = [];
+                const seen = new Set();
+                for (const sug of suggestions) {
+                    if (seen.has(sug.transaction_id)) {
+                        skipped.push({ transaction_id: sug.transaction_id, reason: "duplicate suggestion for this transaction" });
+                        continue;
+                    }
+                    seen.add(sug.transaction_id);
+                    const categoryName = usable.get(sug.category_id);
+                    if (!categoryName) {
+                        skipped.push({ transaction_id: sug.transaction_id, reason: `category '${sug.category_id}' not found` });
+                        continue;
+                    }
+                    let t;
+                    try {
+                        t = (await api.transactions.getTransactionById(budgetId, sug.transaction_id)).data.transaction;
+                    }
+                    catch (error) {
+                        skipped.push({ transaction_id: sug.transaction_id, reason: `could not load transaction: ${getErrorMessage(error)}` });
+                        continue;
+                    }
+                    if (t.deleted) {
+                        skipped.push({ transaction_id: sug.transaction_id, reason: "transaction was deleted" });
+                    }
+                    else if (contentFingerprint(t) !== sug.expected_content_fingerprint) {
+                        skipped.push({ transaction_id: sug.transaction_id, reason: "transaction changed since it was suggested (fingerprint mismatch); run suggest_categories again" });
+                    }
+                    else if (t.category_id || (t.subtransactions ?? []).some(sub => !sub.deleted)) {
+                        skipped.push({ transaction_id: sug.transaction_id, reason: "transaction is already categorized or split" });
+                    }
+                    else {
+                        ok.push({
+                            transaction_id: t.id, category_id: sug.category_id, category: categoryName,
+                            payee: t.payee_name, date: t.date, amount: formatAmount(t.amount, currencyCode)
+                        });
+                    }
+                }
+                if (!isDryRun && ok.length > 0) {
+                    await api.transactions.updateTransactions(budgetId, {
+                        transactions: ok.map(o => ({ id: o.transaction_id, category_id: o.category_id }))
+                    });
+                }
+                return createResponse({
+                    success: true,
+                    dry_run: isDryRun,
+                    message: isDryRun
+                        ? `Would categorize ${ok.length} transaction(s), skip ${skipped.length}. Nothing was written; pass dry_run: false to apply.`
+                        : `Categorized ${ok.length} transaction(s), skipped ${skipped.length}`,
+                    applied_count: isDryRun ? 0 : ok.length,
+                    [isDryRun ? "would_apply" : "applied"]: ok,
+                    skipped
+                });
+            }
             default:
-                return createErrorResponse(`Unknown action: ${action}. Use: create, update, delete, approve, bulk_approve, adjust, import, create_scheduled, update_scheduled, delete_scheduled`);
+                return createErrorResponse(`Unknown action: ${action}. Use: create, update, delete, approve, bulk_approve, adjust, import, create_scheduled, update_scheduled, delete_scheduled, suggest_categories, apply_category_suggestions`);
         }
     }
     catch (error) {

@@ -173,8 +173,10 @@ Transaction mutation operations.
 | `bulk_approve` | Approve multiple transactions at once by IDs |
 | `adjust` | Create a balance adjustment for tracking accounts (specify target balance) |
 | `import` | Trigger import of transactions from linked financial institutions |
+| `suggest_categories` | Suggest a category for each uncategorized transaction: the most common category you have used for the same payee. History only, read-only, nothing leaves YNAB. Each suggestion carries an `expected_content_fingerprint` |
+| `apply_category_suggestions` | Apply `suggestions[{transaction_id, category_id, expected_content_fingerprint}]` in one bulk update. **Preview only by default**: writes only when `dry_run` is explicitly `false`. Skips any transaction that changed (fingerprint mismatch), was deleted, or is already categorized |
 
-Parameters: `action`, `profile?`, `budget?`, `account?`, `transaction_id?`, `amount?`, `payee?`, `category?`, `memo?`, `date?`, `cleared?`, `approved?`, `splits?`, `transaction_ids?`
+Parameters: `action`, `profile?`, `budget?`, `account?`, `transaction_id?`, `amount?`, `payee?`, `category?`, `memo?`, `date?`, `cleared?`, `approved?`, `splits?`, `transaction_ids?`, `since_date?`, `limit?`, `suggestions?`, `dry_run?`
 
 #### `ynab_categories_write`
 
@@ -267,6 +269,13 @@ ynab_transactions_write({ action: "import" })
 // Where did the money go this month? And the last 6 months of cash flow
 ynab_transactions_read({ action: "spending_by_category", limit: 10 })
 ynab_transactions_read({ action: "cash_flow", months: 6 })
+
+// Categorize from your own history: suggest, preview, then apply
+ynab_transactions_write({ action: "suggest_categories", limit: 20 })
+ynab_transactions_write({
+  action: "apply_category_suggestions",
+  suggestions: [{ transaction_id: "id-1", category_id: "cat-1", expected_content_fingerprint: "..." }]
+})  // preview; add dry_run: false to write
 
 // Move money between categories
 ynab_categories_write({

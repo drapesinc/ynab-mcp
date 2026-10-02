@@ -342,7 +342,7 @@
     {
       "name": "ynab_transactions_read",
       "title": "YNAB Transactions (Read)",
-      "description": "Transaction query operations for YNAB. Actions:\n- list: Filter transactions by date, month, account, category, payee, status, amount\n- search: Fuzzy search by payee or memo\n- unapproved: Get pending/unapproved transactions\n- scheduled: List recurring/scheduled transactions",
+      "description": "Transaction query operations for YNAB. Actions:\n- list: Filter transactions by date, month, account, category, payee, status, amount\n- search: Fuzzy search by payee or memo\n- unapproved: Get pending/unapproved transactions\n- scheduled: List recurring/scheduled transactions\n- spending_by_category: Net spending per category (since_date/until_date, default this month; limit = top N rows)\n- spending_by_payee: Net spending per payee (same options)\n- cash_flow: Inflow, outflow and net per month (months, default 6, or since_date/until_date)\nSpending reports count split transactions by leg and leave transfers between accounts out.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -352,7 +352,10 @@
               "list",
               "search",
               "unapproved",
-              "scheduled"
+              "scheduled",
+              "spending_by_category",
+              "spending_by_payee",
+              "cash_flow"
             ],
             "description": "Action to perform"
           },
@@ -419,7 +422,11 @@
           },
           "limit": {
             "type": "number",
-            "description": "Maximum transactions to return (default: 50)"
+            "description": "Maximum transactions to return (default: 50); for spending reports, the maximum rows (top spenders first)"
+          },
+          "months": {
+            "type": "number",
+            "description": "Number of months to cover, ending with the current month (for 'cash_flow'; default 6)"
           }
         },
         "required": [

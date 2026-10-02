@@ -1,22 +1,27 @@
 /**
  * ynab_transactions_read - Transaction query operations
- * Actions: list, search, unapproved
+ * Actions: list, search, unapproved, scheduled, spending_by_category, spending_by_payee, cash_flow
  */
 
 import { z } from "zod";
 import { getApiClient, resolveBudgetId } from "../utils/profile-manager.js";
 import { resolveAccountId, resolveCategoryId } from "../utils/resolver.js";
-import { formatTransaction, dollarsToMilliunits, createResponse, createErrorResponse, getErrorMessage } from "../utils/formatter.js";
+import { toEntries, isInflowCategory } from "../utils/spending.js";
+import { formatAmount, formatTransaction, dollarsToMilliunits, createResponse, createErrorResponse, getErrorMessage } from "../utils/formatter.js";
 
 export const name = "ynab_transactions_read";
 export const description = `Transaction query operations for YNAB. Actions:
 - list: Filter transactions by date, month, account, category, payee, status, amount
 - search: Fuzzy search by payee or memo
 - unapproved: Get pending/unapproved transactions
-- scheduled: List recurring/scheduled transactions`;
+- scheduled: List recurring/scheduled transactions
+- spending_by_category: Net spending per category (since_date/until_date, default this month; limit = top N rows)
+- spending_by_payee: Net spending per payee (same options)
+- cash_flow: Inflow, outflow and net per month (months, default 6, or since_date/until_date)
+Spending reports count split transactions by leg and leave transfers between accounts out.`;
 
 export const inputSchema = {
-  action: z.enum(["list", "search", "unapproved", "scheduled"]).describe("Action to perform"),
+  action: z.enum(["list", "search", "unapproved", "scheduled", "spending_by_category", "spending_by_payee", "cash_flow"]).describe("Action to perform"),
   profile: z.string().optional().describe("Profile name (optional, uses default)"),
   budget: z.string().optional().describe("Budget alias or ID (optional, uses default)"),
   account: z.string().optional().describe("Filter by account name or ID"),
@@ -30,7 +35,8 @@ export const inputSchema = {
   type: z.enum(["unapproved", "uncategorized"]).optional().describe("Filter by transaction type"),
   min_amount: z.number().optional().describe("Minimum amount in dollars (negative for outflows)"),
   max_amount: z.number().optional().describe("Maximum amount in dollars"),
-  limit: z.number().optional().describe("Maximum transactions to return (default: 50)")
+  limit: z.number().optional().describe("Maximum transactions to return (default: 50); for spending reports, the maximum rows (top spenders first)"),
+  months: z.number().optional().describe("Number of months to cover, ending with the current month (for 'cash_flow'; default 6)")
 };
 
 interface ExecuteInput {
@@ -49,6 +55,18 @@ interface ExecuteInput {
   min_amount?: number;
   max_amount?: number;
   limit?: number;
+  months?: number;
+}
+
+/** First day of the month `monthsBack` months ago (YYYY-MM-01), by the server's UTC clock. */
+function monthsAgoStart(monthsBack: number): string {
+  const now = new Date();
+  const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - monthsBack, 1));
+  return d.toISOString().slice(0, 10);
+}
+
+function currentMonthStart(): string {
+  return monthsAgoStart(0);
 }
 
 export async function execute(input: ExecuteInput) {
@@ -56,7 +74,7 @@ export async function execute(input: ExecuteInput) {
     const {
       action, profile, budget, account, category, month,
       since_date, until_date, payee, memo, status, type,
-      min_amount, max_amount, limit = 50
+      min_amount, max_amount, limit = 50, months
     } = input;
 
     const api = getApiClient(profile);
@@ -222,8 +240,90 @@ export async function execute(input: ExecuteInput) {
         });
       }
 
+      case "spending_by_category":
+      case "spending_by_payee": {
+        const from = since_date ?? currentMonthStart();
+        const response = await api.transactions.getTransactions(budgetId, from);
+        const entries = toEntries(response.data.transactions)
+          .filter(e => e.date >= from && (!until_date || e.date <= until_date))
+          .filter(e => !isInflowCategory(e.category));
+
+        const key = action === "spending_by_category" ? "category" : "payee";
+        const totals = new Map<string, { spent: number; count: number }>();
+        for (const e of entries) {
+          const row = totals.get(e[key]) ?? { spent: 0, count: 0 };
+          row.spent += -e.amount; // outflow positive, refunds reduce it
+          row.count += 1;
+          totals.set(e[key], row);
+        }
+
+        const all = [...totals.entries()]
+          .filter(([, v]) => v.spent > 0)
+          .sort((a, b) => b[1].spent - a[1].spent || a[0].localeCompare(b[0]));
+        const totalSpent = all.reduce((sum, [, v]) => sum + v.spent, 0);
+        const shown = all.slice(0, limit);
+
+        return createResponse({
+          budget: planResponse.data.plan.name,
+          currency: currencyCode,
+          since_date: from,
+          until_date: until_date ?? null,
+          totalSpent: formatAmount(totalSpent, currencyCode),
+          rowCount: all.length,
+          shown: shown.length,
+          [action === "spending_by_category" ? "categories" : "payees"]: shown.map(([name, v]) => ({
+            name,
+            spent: formatAmount(v.spent, currencyCode),
+            transactions: v.count,
+            percentOfTotal: totalSpent > 0 ? Math.round((v.spent / totalSpent) * 1000) / 10 : 0
+          })),
+          note: "Net spending (outflows minus refunds). Splits counted by leg; transfers and Ready to Assign inflows left out."
+        });
+      }
+
+      case "cash_flow": {
+        if (months !== undefined && (!Number.isInteger(months) || months < 1 || months > 60)) {
+          return createErrorResponse("'months' must be a whole number between 1 and 60 for 'cash_flow' action");
+        }
+        const from = since_date ?? monthsAgoStart((months ?? 6) - 1);
+        const response = await api.transactions.getTransactions(budgetId, from);
+        const entries = toEntries(response.data.transactions)
+          .filter(e => e.date >= from && (!until_date || e.date <= until_date));
+
+        const byMonth = new Map<string, { inflow: number; outflow: number }>();
+        for (const e of entries) {
+          const m = e.date.slice(0, 7);
+          const row = byMonth.get(m) ?? { inflow: 0, outflow: 0 };
+          if (e.amount >= 0) row.inflow += e.amount; else row.outflow += -e.amount;
+          byMonth.set(m, row);
+        }
+
+        const rows = [...byMonth.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+        const inflow = rows.reduce((sum, [, v]) => sum + v.inflow, 0);
+        const outflow = rows.reduce((sum, [, v]) => sum + v.outflow, 0);
+
+        return createResponse({
+          budget: planResponse.data.plan.name,
+          currency: currencyCode,
+          since_date: from,
+          until_date: until_date ?? null,
+          totals: {
+            inflow: formatAmount(inflow, currencyCode),
+            outflow: formatAmount(outflow, currencyCode),
+            net: formatAmount(inflow - outflow, currencyCode)
+          },
+          months: rows.map(([m, v]) => ({
+            month: m,
+            inflow: formatAmount(v.inflow, currencyCode),
+            outflow: formatAmount(v.outflow, currencyCode),
+            net: formatAmount(v.inflow - v.outflow, currencyCode)
+          })),
+          note: "Splits counted by leg; transfers between accounts left out."
+        });
+      }
+
       default:
-        return createErrorResponse(`Unknown action: ${action}. Use: list, search, unapproved, scheduled`);
+        return createErrorResponse(`Unknown action: ${action}. Use: list, search, unapproved, scheduled, spending_by_category, spending_by_payee, cash_flow`);
     }
   } catch (error) {
     console.error("Error in ynab_transactions_read:", error);

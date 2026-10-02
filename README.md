@@ -139,8 +139,13 @@ Transaction query operations.
 | `search` | Fuzzy search by payee name or memo content |
 | `unapproved` | Get pending/unapproved transactions |
 | `scheduled` | List recurring/scheduled transactions with frequency and next date |
+| `spending_by_category` | Net spending per category for `since_date`..`until_date` (default: this month), top `limit` rows |
+| `spending_by_payee` | Net spending per payee, same options |
+| `cash_flow` | Inflow, outflow and net per month for the last `months` (default 6) or `since_date`..`until_date` |
 
-Parameters: `action`, `profile?`, `budget?`, `account?`, `category?`, `since_date?`, `until_date?`, `payee?`, `memo?`, `status?`, `type?`, `min_amount?`, `max_amount?`, `limit?`
+Spending reports count split transactions by leg (never as "Split") and leave transfers between accounts out. `spending_by_*` also leave out Ready to Assign inflows and net refunds against spending.
+
+Parameters: `action`, `profile?`, `budget?`, `account?`, `category?`, `month?`, `since_date?`, `until_date?`, `payee?`, `memo?`, `status?`, `type?`, `min_amount?`, `max_amount?`, `limit?`, `months?`
 
 #### `ynab_categories_read`
 
@@ -258,6 +263,10 @@ ynab_transactions_write({
 
 // Import from linked bank accounts
 ynab_transactions_write({ action: "import" })
+
+// Where did the money go this month? And the last 6 months of cash flow
+ynab_transactions_read({ action: "spending_by_category", limit: 10 })
+ynab_transactions_read({ action: "cash_flow", months: 6 })
 
 // Move money between categories
 ynab_categories_write({

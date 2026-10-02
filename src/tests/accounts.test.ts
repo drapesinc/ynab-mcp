@@ -110,6 +110,25 @@ describe("ynab_accounts_write create", () => {
     expect(h.fake.writes()[0].body).toEqual({ account: { name: "Cash Jar", type: "cash", balance: 0 } });
   });
 
+  it("rejects the account types the YNAB API cannot create, listing the 6 allowed ones", async () => {
+    for (const type of ["lineOfCredit", "mortgage", "autoLoan", "studentLoan", "personalLoan", "medicalDebt", "otherDebt"]) {
+      const r = await h.call("ynab_accounts_write", { action: "create", name: "Loan", type });
+      expect(r.isError).toBe(true);
+      expect(r.text).toBe(
+        `Error: Account type '${type}' cannot be created through the YNAB API. Allowed types for 'create': checking, savings, cash, creditCard, otherAsset, otherLiability`
+      );
+    }
+    expect(h.fake.writes()).toHaveLength(0);
+  });
+
+  it("creates each of the 6 allowed types", async () => {
+    for (const type of ["checking", "savings", "cash", "creditCard", "otherAsset", "otherLiability"]) {
+      const r = await h.call("ynab_accounts_write", { action: "create", name: `A-${type}`, type });
+      expect(r.isError).toBeUndefined();
+    }
+    expect(h.fake.writes()).toHaveLength(6);
+  });
+
   it("requires name and type, and writes nothing without them", async () => {
     const noName = await h.call("ynab_accounts_write", { action: "create", type: "cash" });
     expect(noName.text).toBe("Error: 'name' is required for 'create' action");

@@ -38,7 +38,7 @@
     "@types/axios": "^0.14.4",
     "axios": "1.11.0",
     "commander": "^14.0.1",
-    "ynab": "^4.0.0",
+    "ynab": "^4.5.0",
     "zod": "^3.23.8"
   },
   "devDependencies": {

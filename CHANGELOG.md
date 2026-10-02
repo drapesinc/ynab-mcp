@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- Upgraded the `ynab` SDK from 4.0.0 to 4.5.0.
+- `ynab_accounts_write` `create` now returns a clear error listing the 6 types the YNAB API can create (checking, savings, cash, creditCard, otherAsset, otherLiability) when another type is passed. The `type` enum still lists all 13 values, and the `ynab_accounts` read filter keeps all 13.
+
 ## [0.1.2] - 2024-03-26
 
 ### Added

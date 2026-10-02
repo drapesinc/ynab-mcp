@@ -9,6 +9,9 @@ import { getApiClient, resolveBudgetId } from "../utils/profile-manager.js";
 import { resolveAccountId } from "../utils/resolver.js";
 import { formatAmount, formatAccountType, dollarsToMilliunits, createResponse, createErrorResponse } from "../utils/formatter.js";
 
+/** Account types the YNAB API can create (the read filter knows more). */
+export const CREATABLE_ACCOUNT_TYPES = ["checking", "savings", "cash", "creditCard", "otherAsset", "otherLiability"] as const;
+
 export const name = "ynab_accounts_write";
 export const description = `Account mutation operations for YNAB. Actions:
 - create: Create a new account
@@ -56,9 +59,15 @@ export async function execute(input: ExecuteInput) {
           return createErrorResponse("'type' is required for 'create' action");
         }
 
+        if (!(CREATABLE_ACCOUNT_TYPES as readonly string[]).includes(type)) {
+          return createErrorResponse(
+            `Account type '${type}' cannot be created through the YNAB API. Allowed types for 'create': ${CREATABLE_ACCOUNT_TYPES.join(", ")}`
+          );
+        }
+
         const newAccount: ynab.SaveAccount = {
           name: accountName,
-          type: type as ynab.AccountType,
+          type: type as ynab.SaveAccountType,
           balance: balance !== undefined ? dollarsToMilliunits(balance) : 0,
         };
 

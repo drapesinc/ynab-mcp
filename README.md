@@ -139,8 +139,13 @@ Transaction query operations.
 | `search` | Fuzzy search by payee name or memo content |
 | `unapproved` | Get pending/unapproved transactions |
 | `scheduled` | List recurring/scheduled transactions with frequency and next date |
+| `spending_by_category` | Net spending per category for `since_date`..`until_date` (default: this month), top `limit` rows |
+| `spending_by_payee` | Net spending per payee, same options |
+| `cash_flow` | Inflow, outflow and net per month for the last `months` (default 6) or `since_date`..`until_date` |
 
-Parameters: `action`, `profile?`, `budget?`, `account?`, `category?`, `since_date?`, `until_date?`, `payee?`, `memo?`, `status?`, `type?`, `min_amount?`, `max_amount?`, `limit?`
+Spending reports count split transactions by leg (never as "Split") and leave transfers between accounts out. `spending_by_*` also leave out Ready to Assign inflows and net refunds against spending.
+
+Parameters: `action`, `profile?`, `budget?`, `account?`, `category?`, `month?`, `since_date?`, `until_date?`, `payee?`, `memo?`, `status?`, `type?`, `min_amount?`, `max_amount?`, `limit?`, `months?`
 
 #### `ynab_categories_read`
 
@@ -168,8 +173,10 @@ Transaction mutation operations.
 | `bulk_approve` | Approve multiple transactions at once by IDs |
 | `adjust` | Create a balance adjustment for tracking accounts (specify target balance) |
 | `import` | Trigger import of transactions from linked financial institutions |
+| `suggest_categories` | Suggest a category for each uncategorized transaction: the most common category you have used for the same payee. History only, read-only, nothing leaves YNAB. Each suggestion carries an `expected_content_fingerprint` |
+| `apply_category_suggestions` | Apply `suggestions[{transaction_id, category_id, expected_content_fingerprint}]` in one bulk update. **Preview only by default**: writes only when `dry_run` is explicitly `false`. Skips any transaction that changed (fingerprint mismatch), was deleted, or is already categorized |
 
-Parameters: `action`, `profile?`, `budget?`, `account?`, `transaction_id?`, `amount?`, `payee?`, `category?`, `memo?`, `date?`, `cleared?`, `approved?`, `splits?`, `transaction_ids?`
+Parameters: `action`, `profile?`, `budget?`, `account?`, `transaction_id?`, `amount?`, `payee?`, `category?`, `memo?`, `date?`, `cleared?`, `approved?`, `splits?`, `transaction_ids?`, `since_date?`, `limit?`, `suggestions?`, `dry_run?`
 
 #### `ynab_categories_write`
 
@@ -178,9 +185,10 @@ Category mutation operations.
 | Action | Description |
 |--------|-------------|
 | `update` | Set the budgeted amount for a category in a specific month |
-| `move` | Move funds between categories (validates sufficient funds) |
+| `move` | Move funds between categories (validates sufficient funds; if the second write fails, the error says which category was already changed) |
+| `auto_assign` | Fill underfunded goals from Ready to Assign, biggest gap first, never exceeding `max_total` or Ready to Assign. **Preview only by default**: it writes nothing unless `dry_run` is explicitly `false` |
 
-Parameters: `action`, `profile?`, `budget?`, `category?`, `from_category?`, `to_category?`, `amount?`, `month?`
+Parameters: `action`, `profile?`, `budget?`, `category?`, `from_category?`, `to_category?`, `amount?`, `month?`, `dry_run?`, `max_total?`
 
 #### `ynab_accounts_write`
 
@@ -258,6 +266,17 @@ ynab_transactions_write({
 // Import from linked bank accounts
 ynab_transactions_write({ action: "import" })
 
+// Where did the money go this month? And the last 6 months of cash flow
+ynab_transactions_read({ action: "spending_by_category", limit: 10 })
+ynab_transactions_read({ action: "cash_flow", months: 6 })
+
+// Categorize from your own history: suggest, preview, then apply
+ynab_transactions_write({ action: "suggest_categories", limit: 20 })
+ynab_transactions_write({
+  action: "apply_category_suggestions",
+  suggestions: [{ transaction_id: "id-1", category_id: "cat-1", expected_content_fingerprint: "..." }]
+})  // preview; add dry_run: false to write
+
 // Move money between categories
 ynab_categories_write({
   action: "move",
@@ -265,6 +284,10 @@ ynab_categories_write({
   to_category: "Groceries",
   amount: 50
 })
+
+// Preview, then apply, auto-assigning Ready to Assign to underfunded goals (max $500)
+ynab_categories_write({ action: "auto_assign", max_total: 500 })
+ynab_categories_write({ action: "auto_assign", max_total: 500, dry_run: false })
 
 // Reconcile an account
 ynab_accounts_write({

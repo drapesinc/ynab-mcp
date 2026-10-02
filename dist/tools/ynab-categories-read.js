@@ -5,7 +5,7 @@
 import { z } from "zod";
 import { getApiClient, resolveBudgetId } from "../utils/profile-manager.js";
 import { resolveCategoryId } from "../utils/resolver.js";
-import { formatAmount, formatGoalType, createResponse, createErrorResponse } from "../utils/formatter.js";
+import { formatAmount, formatGoalType, createResponse, createErrorResponse, getErrorMessage } from "../utils/formatter.js";
 export const name = "ynab_categories_read";
 export const description = `Category query operations for YNAB. Actions:
 - list: List all categories grouped by category group
@@ -108,6 +108,6 @@ export async function execute(input) {
     }
     catch (error) {
         console.error("Error in ynab_categories_read:", error);
-        return createErrorResponse(error instanceof Error ? error.message : String(error));
+        return createErrorResponse(getErrorMessage(error));
     }
 }

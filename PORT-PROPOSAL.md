@@ -1,4 +1,8 @@
-# Upstream port proposal (not built; each item needs Yaw's OK)
+# Upstream port proposal
+
+**Status 2026-10-02: all six items approved by Yaw and implemented** (see CHANGELOG `[Unreleased]`). Decisions: #1 keep 13 types, error lists the 6 allowed; #3 auto_assign defaults to dry run; #5 history-based suggestions only, no third-party AI.
+
+(Original proposal below.)
 
 Ported 2026-10-01: `isError: true` on failures (upstream 4cb1051) and split-transaction legs (c70658f). The items below would change the fork's tool schemas or need a decision.
 

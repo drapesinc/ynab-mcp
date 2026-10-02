@@ -6,7 +6,7 @@ import { z } from "zod";
 import * as ynab from "ynab";
 import { getApiClient, resolveBudgetId, getDefaultAccount } from "../utils/profile-manager.js";
 import { resolveAccountId, resolveCategoryId, resolvePayeeId } from "../utils/resolver.js";
-import { formatTransaction, dollarsToMilliunits, formatDate, createResponse, createErrorResponse } from "../utils/formatter.js";
+import { formatTransaction, dollarsToMilliunits, formatDate, createResponse, createErrorResponse, getErrorMessage } from "../utils/formatter.js";
 export const name = "ynab_transactions_write";
 export const description = `Transaction mutation operations for YNAB. Actions:
 - create: Create transaction (with optional split support)
@@ -403,6 +403,6 @@ export async function execute(input) {
     }
     catch (error) {
         console.error("Error in ynab_transactions_write:", error);
-        return createErrorResponse(error instanceof Error ? error.message : String(error));
+        return createErrorResponse(getErrorMessage(error));
     }
 }

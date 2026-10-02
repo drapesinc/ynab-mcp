@@ -5,7 +5,7 @@
 
 import { z } from "zod";
 import { getApiClient, resolveBudgetId, getAllProfiles, getProfileInfo } from "../utils/profile-manager.js";
-import { formatBudgetSummary, createResponse, createErrorResponse } from "../utils/formatter.js";
+import { formatBudgetSummary, createResponse, createErrorResponse, getErrorMessage } from "../utils/formatter.js";
 
 export const name = "ynab_budgets";
 export const description = `Budget operations for YNAB. Actions:
@@ -125,6 +125,6 @@ export async function execute(input: ExecuteInput) {
     }
   } catch (error) {
     console.error("Error in ynab_budgets:", error);
-    return createErrorResponse(error instanceof Error ? error.message : String(error));
+    return createErrorResponse(getErrorMessage(error));
   }
 }

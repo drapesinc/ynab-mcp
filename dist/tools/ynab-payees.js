@@ -5,7 +5,7 @@
 import { z } from "zod";
 import { getApiClient, resolveBudgetId } from "../utils/profile-manager.js";
 import { resolvePayeeId } from "../utils/resolver.js";
-import { createResponse, createErrorResponse } from "../utils/formatter.js";
+import { createResponse, createErrorResponse, getErrorMessage } from "../utils/formatter.js";
 export const name = "ynab_payees";
 export const description = `Payee operations for YNAB. Actions:
 - list: List all payees
@@ -113,6 +113,6 @@ export async function execute(input) {
     }
     catch (error) {
         console.error("Error in ynab_payees:", error);
-        return createErrorResponse(error instanceof Error ? error.message : String(error));
+        return createErrorResponse(getErrorMessage(error));
     }
 }

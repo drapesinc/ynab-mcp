@@ -7,7 +7,7 @@ import { z } from "zod";
 import * as ynab from "ynab";
 import { getApiClient, resolveBudgetId } from "../utils/profile-manager.js";
 import { resolveCategoryId } from "../utils/resolver.js";
-import { formatAmount, dollarsToMilliunits, createResponse, createErrorResponse } from "../utils/formatter.js";
+import { formatAmount, dollarsToMilliunits, createResponse, createErrorResponse, getErrorMessage } from "../utils/formatter.js";
 
 export const name = "ynab_categories_write";
 export const description = `Category mutation operations for YNAB. Actions:
@@ -229,6 +229,6 @@ export async function execute(input: ExecuteInput) {
     }
   } catch (error) {
     console.error("Error in ynab_categories_write:", error);
-    return createErrorResponse(error instanceof Error ? error.message : String(error));
+    return createErrorResponse(getErrorMessage(error));
   }
 }

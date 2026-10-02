@@ -125,6 +125,33 @@ export function formatGoalType(goalType: string | null | undefined): string {
 }
 
 /**
+ * Turn anything a tool can catch into a readable message.
+ *
+ * The ynab SDK throws YNAB's error body as a plain object
+ * ({ error: { id, name, detail } }), which String() renders as
+ * "[object Object]". Ported from upstream's getErrorMessage.
+ */
+export function getErrorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (typeof error === 'string') return error;
+  if (error && typeof error === 'object') {
+    const e = error as Record<string, any>;
+    const inner = e.error && typeof e.error === 'object' ? e.error : e;
+    const detail = inner.detail ?? inner.message;
+    if (typeof detail === 'string' && detail) {
+      const code = [inner.id, inner.name].filter((x) => typeof x === 'string' && x).join(' ');
+      return code ? `${detail} (${code})` : detail;
+    }
+    try {
+      return JSON.stringify(error);
+    } catch {
+      // fall through
+    }
+  }
+  return String(error);
+}
+
+/**
  * Create MCP response format
  */
 export function createResponse(data: unknown): { content: Array<{ type: 'text'; text: string }> } {

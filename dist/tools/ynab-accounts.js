@@ -5,7 +5,7 @@
 import { z } from "zod";
 import { getApiClient, resolveBudgetId } from "../utils/profile-manager.js";
 import { resolveAccountId } from "../utils/resolver.js";
-import { formatAmount, formatAccountType, createResponse, createErrorResponse } from "../utils/formatter.js";
+import { formatAmount, formatAccountType, createResponse, createErrorResponse, getErrorMessage } from "../utils/formatter.js";
 export const name = "ynab_accounts";
 export const description = `Account read operations for YNAB. Actions:
 - list: List accounts with optional filters (type, on_budget, closed)
@@ -122,6 +122,6 @@ export async function execute(input) {
     }
     catch (error) {
         console.error("Error in ynab_accounts:", error);
-        return createErrorResponse(error instanceof Error ? error.message : String(error));
+        return createErrorResponse(getErrorMessage(error));
     }
 }

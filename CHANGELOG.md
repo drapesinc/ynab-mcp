@@ -11,6 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Upgraded the `ynab` SDK from 4.0.0 to 4.5.0.
 - `ynab_accounts_write` `create` now returns a clear error listing the 6 types the YNAB API can create (checking, savings, cash, creditCard, otherAsset, otherLiability) when another type is passed. The `type` enum still lists all 13 values, and the `ynab_accounts` read filter keeps all 13.
 
+### Fixed
+- YNAB API errors (plain objects thrown by the SDK) now show YNAB's own message, for example `Error: account_id is invalid (400 bad_request)`, instead of `Error: [object Object]`.
+
 ## [0.1.2] - 2024-03-26
 
 ### Added

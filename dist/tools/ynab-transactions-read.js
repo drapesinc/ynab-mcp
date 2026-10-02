@@ -5,7 +5,7 @@
 import { z } from "zod";
 import { getApiClient, resolveBudgetId } from "../utils/profile-manager.js";
 import { resolveAccountId, resolveCategoryId } from "../utils/resolver.js";
-import { formatTransaction, dollarsToMilliunits, createResponse, createErrorResponse } from "../utils/formatter.js";
+import { formatTransaction, dollarsToMilliunits, createResponse, createErrorResponse, getErrorMessage } from "../utils/formatter.js";
 export const name = "ynab_transactions_read";
 export const description = `Transaction query operations for YNAB. Actions:
 - list: Filter transactions by date, month, account, category, payee, status, amount
@@ -165,6 +165,6 @@ export async function execute(input) {
     }
     catch (error) {
         console.error("Error in ynab_transactions_read:", error);
-        return createErrorResponse(error instanceof Error ? error.message : String(error));
+        return createErrorResponse(getErrorMessage(error));
     }
 }

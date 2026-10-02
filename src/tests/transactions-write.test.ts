@@ -103,9 +103,10 @@ describe("create", () => {
   it("reports a YNAB API failure as error text", async () => {
     h.fake.failNext("POST", /\/transactions$/, 400, "account_id is invalid");
     const r = await h.call("ynab_transactions_write", { action: "create", account: "Chequing", amount: -1 });
-    // KNOWN GAP (see PORT-PROPOSAL.md): the SDK throws YNAB's error body as a
-    // plain object, which the fork stringifies without its detail.
-    expect(r.text).toBe("Error: [object Object]");
+    // The SDK throws YNAB's error body as a plain object; getErrorMessage
+    // surfaces YNAB's own detail instead of "[object Object]".
+    expect(r.isError).toBe(true);
+    expect(r.text).toBe("Error: account_id is invalid (400 bad_request)");
   });
 });
 

@@ -34,9 +34,9 @@
     "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.0.0",
+    "@modelcontextprotocol/sdk": "^1.18.0",
     "@types/axios": "^0.14.4",
-    "axios": "1.11.0",
+    "axios": "^1.20.0",
     "commander": "^14.0.1",
     "ynab": "^4.5.0",
     "zod": "^3.23.8"

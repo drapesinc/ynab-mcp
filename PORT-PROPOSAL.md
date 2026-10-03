@@ -12,3 +12,18 @@ Ported 2026-10-01: `isError: true` on failures (upstream 4cb1051) and split-tran
 4. **Spending reports.** New `ynab_transactions_read` actions `spending_by_category`, `spending_by_payee`, `cash_flow`. They reuse `since_date`, `until_date`, `limit`; one new optional param `months` (number) for `cash_flow`. Splits counted by leg, transfers left out.
 5. **Category suggestions (preview + guarded apply).** New actions `suggest_categories` and `apply_category_suggestions` (on `ynab_transactions_write`, or a new 9th tool), with `suggestions[{transaction_id, category_id, expected_content_fingerprint}]` and `dry_run`. Upstream's AI mode sends payee and memo text to TypeSafe, a third party (opt-in env `YNAB_AI_CATEGORIZATION` + `TYPESAFE_API_KEY`). Suggest: history-based suggestions only, no TypeSafe.
 6. **Error detail (no schema change).** YNAB API errors reach the caller as `Error: [object Object]` because the SDK throws a plain object. Port upstream's `getErrorMessage` so YNAB's own message shows. Pinned today in `src/tests/transactions-write.test.ts`.
+
+## Round 2 — upstream to 17a6085 (merged 2026-10-03, not yet ported)
+
+The 2026-10-03 sync merged upstream with "ours" for all code: upstream's per-tool files, Cloudflare
+Worker, registry and npm-publish workflows were left out, because the fork keeps its 8 consolidated
+`ynab_*` tools. Only upstream's dev-dependency security bump (vitest 4.1.11, inspector 0.16.8) was
+taken. Two upstream features from 2026-10-02 are not in the fork yet:
+
+7. **Update a transaction into a split** (upstream 978db93). The fork's `create` already takes
+   `splits`; `update` does not. Port: accept `splits` on `ynab_transactions_write` `update`, and
+   refuse to re-split a transaction that is already split (YNAB does not support it).
+8. **Similar-payee history for category suggestions** (upstream 7799276). When a payee has no
+   history, fall back to payees whose normalised name is a prefix of the other (shorter at least 6
+   chars), e.g. "Better Bl" uses "Better Blend". Report `match` and `matched_payee_names`. Upstream
+   also sends this to TypeSafe; port the history part only, per decision #5.

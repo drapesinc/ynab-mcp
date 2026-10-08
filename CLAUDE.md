@@ -95,3 +95,10 @@ server.registerTool(MyTool.name, {
 - YNAB SDK types: `node_modules/ynab/dist/index.d.ts`
 - OpenAPI spec: https://api.ynab.com/papi/open_api_spec.yaml
 - Amounts are in milliunits (multiply dollars by 1000)
+## Repo hygiene
+
+- Commit scripts, configs and docs. Never commit run outputs (logs, progress files), `.bak-*` copies, `__pycache__`, scratch dirs, or anything holding secrets.
+- Put run outputs and scratch under an ignored path the moment you create them, and add the ignore rule in the same commit as the script that makes them.
+- Do not leave one-off scripts untracked: commit them with the change they make, or delete them when done.
+- End each session with a clean `git status`: commit, ignore, or move aside. Never delete logs.
+- Grep new files for tokens and keys before committing. Secrets stay as `op://` references.

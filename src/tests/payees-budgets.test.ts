@@ -3,7 +3,7 @@
  * (get, months; list/profiles are covered in profile-routing.test.ts).
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { startServer, PLANS, TOKENS, type Harness } from "./helpers/harness.js";
+import { startServer, PLANS, TOKENS, type Harness, expectInvalid } from "./helpers/harness.js";
 import { idFor } from "./helpers/fake-ynab.js";
 
 let h: Harness;
@@ -109,6 +109,6 @@ describe("ynab_budgets", () => {
   });
 
   it("rejects an unknown action at the schema level", async () => {
-    await expect(h.call("ynab_budgets", { action: "delete" })).rejects.toThrow(/Invalid arguments for tool ynab_budgets/);
+    await expectInvalid(h.call("ynab_budgets", { action: "delete" }), /Invalid arguments for tool ynab_budgets/);
   });
 });

@@ -41,51 +41,61 @@ try {
 
 // Register consolidated tools (8 total)
 
+// registerTool is generic over the zod shape. With SDK >= 1.31 the compiler
+// spends minutes (GBs of memory) instantiating it for these large shapes, so
+// register through a loosely typed alias. Runtime validation is unchanged:
+// the SDK still builds and applies the zod schema from inputSchema.
+const register = server.registerTool.bind(server) as unknown as (
+  name: string,
+  config: { title: string; description: string; inputSchema: unknown },
+  callback: (input: any) => Promise<any>,
+) => unknown;
+
 // Read-only tools (4)
-server.registerTool(YnabBudgets.name, {
+register(YnabBudgets.name, {
   title: "YNAB Budgets",
   description: YnabBudgets.description,
   inputSchema: YnabBudgets.inputSchema,
 }, async (input) => YnabBudgets.execute(input as Parameters<typeof YnabBudgets.execute>[0]));
 
-server.registerTool(YnabAccounts.name, {
+register(YnabAccounts.name, {
   title: "YNAB Accounts",
   description: YnabAccounts.description,
   inputSchema: YnabAccounts.inputSchema,
 }, async (input) => YnabAccounts.execute(input as Parameters<typeof YnabAccounts.execute>[0]));
 
-server.registerTool(YnabTransactionsRead.name, {
+register(YnabTransactionsRead.name, {
   title: "YNAB Transactions (Read)",
   description: YnabTransactionsRead.description,
   inputSchema: YnabTransactionsRead.inputSchema,
 }, async (input) => YnabTransactionsRead.execute(input as Parameters<typeof YnabTransactionsRead.execute>[0]));
 
-server.registerTool(YnabCategoriesRead.name, {
+register(YnabCategoriesRead.name, {
   title: "YNAB Categories (Read)",
   description: YnabCategoriesRead.description,
   inputSchema: YnabCategoriesRead.inputSchema,
 }, async (input) => YnabCategoriesRead.execute(input as Parameters<typeof YnabCategoriesRead.execute>[0]));
 
 // Write tools (4)
-server.registerTool(YnabTransactionsWrite.name, {
+register(YnabTransactionsWrite.name, {
   title: "YNAB Transactions (Write)",
   description: YnabTransactionsWrite.description,
   inputSchema: YnabTransactionsWrite.inputSchema,
 }, async (input) => YnabTransactionsWrite.execute(input as Parameters<typeof YnabTransactionsWrite.execute>[0]));
 
-server.registerTool(YnabCategoriesWrite.name, {
+register(YnabCategoriesWrite.name, {
   title: "YNAB Categories (Write)",
   description: YnabCategoriesWrite.description,
   inputSchema: YnabCategoriesWrite.inputSchema,
 }, async (input) => YnabCategoriesWrite.execute(input as Parameters<typeof YnabCategoriesWrite.execute>[0]));
 
-server.registerTool(YnabAccountsWrite.name, {
+register(YnabAccountsWrite.name, {
   title: "YNAB Accounts (Write)",
   description: YnabAccountsWrite.description,
   inputSchema: YnabAccountsWrite.inputSchema,
 }, async (input) => YnabAccountsWrite.execute(input as Parameters<typeof YnabAccountsWrite.execute>[0]));
 
-server.registerTool(YnabPayees.name, {
+register(YnabPayees.name, {
   title: "YNAB Payees",
   description: YnabPayees.description,
   inputSchema: YnabPayees.inputSchema,

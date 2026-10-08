@@ -8,7 +8,7 @@
  * server loads, only dummy tokens are configured, and fetch is replaced by the
  * fake (which refuses any non-YNAB URL and never touches the network).
  */
-import { vi } from "vitest";
+import { expect, vi } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { FakeYnab, PLANS, TOKENS } from "./fake-ynab.js";
@@ -99,4 +99,21 @@ export async function startServer(): Promise<Harness> {
       vi.useRealTimers();
     },
   };
+}
+
+/**
+ * Assert that a call failed zod input validation. SDK <= 1.30 rejected the
+ * promise; SDK >= 1.32 returns an isError result with the same message. Both
+ * mean the call was refused before the handler ran, so accept either.
+ */
+export async function expectInvalid(call: Promise<ToolResult>, message: RegExp): Promise<void> {
+  let text: string;
+  try {
+    const r = await call;
+    expect(r.isError).toBe(true);
+    text = r.text;
+  } catch (e) {
+    text = e instanceof Error ? e.message : String(e);
+  }
+  expect(text).toMatch(message);
 }

@@ -3,7 +3,7 @@
  * `adjust` (balance adjustment for tracking accounts).
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { startServer, PLANS, TOKENS, type Harness } from "./helpers/harness.js";
+import { startServer, PLANS, TOKENS, type Harness, expectInvalid } from "./helpers/harness.js";
 import { idFor } from "./helpers/fake-ynab.js";
 
 let h: Harness;
@@ -297,9 +297,9 @@ describe("scheduled transactions", () => {
 
 describe("argument validation", () => {
   it("rejects an unknown action and bad enums at the schema level, before any API call", async () => {
-    await expect(h.call("ynab_transactions_write", { action: "transfer" })).rejects.toThrow(/Invalid arguments for tool ynab_transactions_write/);
-    await expect(h.call("ynab_transactions_write", { action: "create_scheduled", frequency: "fortnightly" })).rejects.toThrow(/Invalid arguments/);
-    await expect(h.call("ynab_transactions_write", { action: "create", amount: "12" })).rejects.toThrow(/Invalid arguments/);
+    await expectInvalid(h.call("ynab_transactions_write", { action: "transfer" }), /Invalid arguments for tool ynab_transactions_write/);
+    await expectInvalid(h.call("ynab_transactions_write", { action: "create_scheduled", frequency: "fortnightly" }), /Invalid arguments/);
+    await expectInvalid(h.call("ynab_transactions_write", { action: "create", amount: "12" }), /Invalid arguments/);
     expect(h.fake.requests).toHaveLength(0);
   });
 });

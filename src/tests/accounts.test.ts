@@ -3,7 +3,7 @@
  * (create, reconcile).
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { startServer, PLANS, TOKENS, type Harness } from "./helpers/harness.js";
+import { startServer, PLANS, TOKENS, type Harness, expectInvalid } from "./helpers/harness.js";
 import { idFor } from "./helpers/fake-ynab.js";
 
 let h: Harness;
@@ -81,7 +81,7 @@ describe("ynab_accounts", () => {
   });
 
   it("rejects an account type outside the enum at the schema level", async () => {
-    await expect(h.call("ynab_accounts", { action: "list", type: "brokerage" })).rejects.toThrow(/Invalid arguments for tool ynab_accounts/);
+    await expectInvalid(h.call("ynab_accounts", { action: "list", type: "brokerage" }), /Invalid arguments for tool ynab_accounts/);
     expect(h.fake.requests).toHaveLength(0);
   });
 });

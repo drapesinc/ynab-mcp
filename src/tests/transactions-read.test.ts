@@ -2,7 +2,7 @@
  * Characterization: ynab_transactions_read (list, search, unapproved, scheduled).
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { startServer, PLANS, TOKENS, type Harness } from "./helpers/harness.js";
+import { startServer, PLANS, TOKENS, type Harness, expectInvalid } from "./helpers/harness.js";
 import { idFor } from "./helpers/fake-ynab.js";
 
 let h: Harness;
@@ -114,7 +114,7 @@ describe("ynab_transactions_read list", () => {
   });
 
   it("rejects an invalid status at the schema level", async () => {
-    await expect(h.call("ynab_transactions_read", { action: "list", status: "pending" })).rejects.toThrow(/Invalid arguments/);
+    await expectInvalid(h.call("ynab_transactions_read", { action: "list", status: "pending" }), /Invalid arguments/);
   });
 });
 

@@ -1,51 +1,79 @@
 {
-  "name": "@jyoansah/ynab-mcp",
-  "version": "2.0.0",
-  "description": "YNAB MCP server with multi-token, multi-budget, multi-account support",
-  "author": "Yaw Owusu-Ansah <jyoansah@gmail.com>",
-  "type": "module",
-  "bin": {
-    "ynab-mcp": "./dist/index.js"
+  "name": "ynab-mcp-server",
+  "version": "0.9.0",
+  "description": "MCP server for interacting with a YNAB plan",
+  "author": "Caleb LeNoir <caleb.lenoir@hey.com>",
+  "contributors": [
+    {
+      "name": "lwsinclair",
+      "url": "https://github.com/lwsinclair"
+    },
+    {
+      "name": "grandcamel",
+      "url": "https://github.com/grandcamel"
+    },
+    {
+      "name": "ianthebeard",
+      "url": "https://github.com/ianthebeard"
+    }
+  ],
+  "repository": "git+https://github.com/calebl/ynab-mcp-server.git",
+  "homepage": "https://github.com/calebl/ynab-mcp-server#readme",
+  "bugs": {
+    "url": "https://github.com/calebl/ynab-mcp-server/issues"
   },
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/jyoansah/ynab-mcp.git"
-  },
+  "license": "MIT",
   "keywords": [
-    "ynab",
     "mcp",
     "model-context-protocol",
-    "budget",
-    "finance",
-    "ai"
+    "ynab",
+    "budgeting",
+    "personal-finance"
   ],
-  "license": "MIT",
+  "engines": {
+    "node": "^22 || >=24"
+  },
+  "type": "module",
+  "bin": {
+    "ynab-mcp-server": "./dist/index.js",
+    "ynab-mcp-server-http": "./dist/http.js"
+  },
   "files": [
     "dist"
   ],
   "scripts": {
-    "build": "tsc && chmod +x dist/index.js",
+    "build": "tsc && chmod +x dist/index.js dist/http.js",
     "prepare": "npm run build",
     "watch": "tsc --watch",
     "start": "node dist/index.js",
+    "start:http": "node dist/http.js",
     "debug": "npm run build && npx @modelcontextprotocol/inspector dist/index.js",
     "test": "vitest",
     "test:watch": "vitest watch",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "vitest run --coverage",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.worker.json",
+    "dev:worker": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "cf-access": "node scripts/cloudflare-access.mjs",
+    "test:run": "vitest run"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.18.0",
-    "@types/axios": "^0.14.4",
-    "axios": "^1.20.0",
-    "commander": "^14.0.1",
+    "@cloudflare/workers-oauth-provider": "^0.10.3",
+    "@modelcontextprotocol/sdk": "^1.32.1",
+    "@modelcontextprotocol/server": "^2.3.0",
+    "jose": "^6.2.14",
     "ynab": "^4.5.0",
-    "zod": "^3.23.8"
+    "zod": "^4.5.4"
   },
   "devDependencies": {
-    "@modelcontextprotocol/inspector": "^0.16.8",
-    "@types/node": "^20.11.24",
-    "@vitest/coverage-v8": "^4.1.12",
+    "@cloudflare/workers-types": "^5.20260906.1",
+    "@types/node": "^22.20.3",
+    "@vitest/coverage-v8": "^4.1.11",
     "typescript": "^5.3.3",
-    "vitest": "^4.1.12"
+    "vitest": "^4.1.11",
+    "wrangler": "^4.129.0"
+  },
+  "overrides": {
+    "undici": "^7.30.1"
   }
 }

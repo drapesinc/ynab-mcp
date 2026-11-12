@@ -1,0 +1,163 @@
+import { resolvePlanId } from "./planId.js";
+import { z } from "zod";
+import { getErrorMessage } from "./errorUtils.js";
+import { formatAmount, getDecimalDigits, toDollars, toMilliunits } from "./money.js";
+export const name = "ynab_auto_assign";
+export const description = "Distributes Ready to Assign across categories whose monthly goal is not yet fully funded, largest shortfall first, until the money runs out. Set dryRun to see the plan without changing anything.";
+export const inputSchema = {
+    planId: z.string().optional().describe("The plan ID (optional, defaults to YNAB_PLAN_ID; budgetId is a deprecated alias)"),
+    budgetId: z.string().optional().describe("Deprecated alias of planId (still accepted)"),
+    month: z.string().regex(/^(current|\d{4}-\d{2}-\d{2})$/).optional().describe("The plan month in ISO format (e.g. 2024-01-01, must be the first of the month), or 'current'. Defaults to 'current'."),
+    dryRun: z.boolean().optional().describe("Return the proposed assignments without writing them (default: false)"),
+    maxTotal: z.number().positive().optional().describe("Only assign up to this many dollars, even if more is available in Ready to Assign"),
+};
+/** Builds the assignment plan in milliunits, biggest shortfall first. */
+export function planAssignments(categories, availableMilliunits, decimalDigits) {
+    const underfunded = categories
+        .filter((category) => !category.deleted && !category.hidden)
+        .filter((category) => (category.goal_under_funded ?? 0) > 0)
+        .sort((a, b) => (b.goal_under_funded ?? 0) - (a.goal_under_funded ?? 0));
+    const plan = [];
+    let remaining = availableMilliunits;
+    for (const category of underfunded) {
+        if (remaining <= 0)
+            break;
+        const shortfall = category.goal_under_funded ?? 0;
+        const assign = Math.min(shortfall, remaining);
+        remaining -= assign;
+        plan.push({
+            categoryId: category.id,
+            name: category.name,
+            currentBudgeted: toDollars(category.budgeted, decimalDigits),
+            assign: toDollars(assign, decimalDigits),
+            newBudgeted: toDollars(category.budgeted + assign, decimalDigits),
+            shortfallRemaining: toDollars(shortfall - assign, decimalDigits),
+            assignMilliunits: assign,
+            newBudgetedMilliunits: category.budgeted + assign,
+        });
+    }
+    return plan;
+}
+/** Drops the internal milliunit fields so responses stay in plain currency. */
+function forOutput({ assignMilliunits, newBudgetedMilliunits, ...rest }) {
+    return rest;
+}
+export async function execute(input, api) {
+    try {
+        const budgetId = resolvePlanId(input);
+        const month = input.month || "current";
+        const [monthResponse, decimalDigits] = await Promise.all([
+            api.months.getPlanMonth(budgetId, month),
+            getDecimalDigits(api, budgetId),
+        ]);
+        const readyToAssign = monthResponse.data.month.to_be_budgeted;
+        if (readyToAssign <= 0) {
+            return {
+                content: [{
+                        type: "text",
+                        text: JSON.stringify({
+                            success: true,
+                            month,
+                            ready_to_assign: toDollars(readyToAssign, decimalDigits),
+                            assignments: [],
+                            message: "Nothing to assign - Ready to Assign is not positive.",
+                        }, null, 2),
+                    }],
+            };
+        }
+        const cap = input.maxTotal !== undefined
+            ? Math.min(readyToAssign, toMilliunits(input.maxTotal))
+            : readyToAssign;
+        const plan = planAssignments(monthResponse.data.month.categories, cap, decimalDigits);
+        const totalPlannedMilliunits = plan.reduce((sum, item) => sum + item.assignMilliunits, 0);
+        const totalPlanned = toDollars(totalPlannedMilliunits, decimalDigits);
+        if (plan.length === 0) {
+            return {
+                content: [{
+                        type: "text",
+                        text: JSON.stringify({
+                            success: true,
+                            month,
+                            ready_to_assign: toDollars(readyToAssign, decimalDigits),
+                            assignments: [],
+                            message: "Nothing to assign - no category has an unmet monthly goal.",
+                        }, null, 2),
+                    }],
+            };
+        }
+        if (input.dryRun) {
+            return {
+                content: [{
+                        type: "text",
+                        text: JSON.stringify({
+                            success: true,
+                            dry_run: true,
+                            month,
+                            ready_to_assign: toDollars(readyToAssign, decimalDigits),
+                            total_to_assign: totalPlanned,
+                            remaining_after: toDollars(readyToAssign - totalPlannedMilliunits, decimalDigits),
+                            assignments: plan.map(forOutput),
+                            message: `Would assign $${formatAmount(totalPlanned, decimalDigits)} across ${plan.length} categor${plan.length === 1 ? "y" : "ies"}. Call again without dryRun to apply.`,
+                        }, null, 2),
+                    }],
+            };
+        }
+        // Apply one category at a time so a failure part-way through can report
+        // exactly what already landed.
+        const applied = [];
+        for (const item of plan) {
+            try {
+                await api.categories.updateMonthCategory(budgetId, month, item.categoryId, {
+                    category: { budgeted: item.newBudgetedMilliunits },
+                });
+                applied.push(item);
+            }
+            catch (error) {
+                console.error(`Error assigning to ${item.name}:`, error);
+                const assignedSoFarMilliunits = applied.reduce((sum, item) => sum + item.assignMilliunits, 0);
+                const assignedSoFar = toDollars(assignedSoFarMilliunits, decimalDigits);
+                return {
+                    content: [{
+                            type: "text",
+                            text: JSON.stringify({
+                                success: false,
+                                partial: true,
+                                month,
+                                error: getErrorMessage(error),
+                                assigned: applied.map(forOutput),
+                                total_assigned: assignedSoFar,
+                                not_assigned: plan.slice(applied.length).map(forOutput),
+                                message: `Assigned $${formatAmount(assignedSoFar, decimalDigits)} to ${applied.length} categor${applied.length === 1 ? "y" : "ies"} before failing on ${item.name}. The remaining categories were left untouched.`,
+                            }, null, 2),
+                        }],
+                };
+            }
+        }
+        return {
+            content: [{
+                    type: "text",
+                    text: JSON.stringify({
+                        success: true,
+                        month,
+                        ready_to_assign_before: toDollars(readyToAssign, decimalDigits),
+                        total_assigned: totalPlanned,
+                        remaining_after: toDollars(readyToAssign - totalPlannedMilliunits, decimalDigits),
+                        assignments: applied.map(forOutput),
+                        message: `Assigned $${formatAmount(totalPlanned, decimalDigits)} across ${applied.length} categor${applied.length === 1 ? "y" : "ies"}.`,
+                    }, null, 2),
+                }],
+        };
+    }
+    catch (error) {
+        console.error("Error auto-assigning funds:", error);
+        return {
+            content: [{
+                    type: "text",
+                    text: JSON.stringify({
+                        success: false,
+                        error: getErrorMessage(error),
+                    }, null, 2),
+                }],
+        };
+    }
+}

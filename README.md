@@ -1,419 +1,516 @@
-# ynab-mcp
+# ynab-mcp-server
 
-A comprehensive YNAB (You Need A Budget) MCP server with **multi-token, multi-budget, multi-account** support. Designed for AI assistants that need to read and manage YNAB budgets through the Model Context Protocol.
+> **Fork note (drapesinc/ynab-mcp):** set `YNAB_PROFILES=personal,ammish` with one `YNAB_TOKEN_<NAME>` per login, and optional `YNAB_BUDGETS_<NAME>=cad:<plan id>,usd:<plan id>`, `YNAB_DEFAULT_PROFILE`, `YNAB_DEFAULT_BUDGET`. Every tool then takes an optional `profile` argument, and `planId` may be an alias. Without `YNAB_PROFILES` the server behaves exactly as upstream. See `src/profiles.ts`.
 
-Based on [calebl/ynab-mcp-server](https://github.com/calebl/ynab-mcp-server), enhanced with:
 
-- **Multi-profile support** -- manage multiple YNAB accounts with separate API tokens
-- **Budget aliases** -- use friendly names like `cad` or `usd` instead of UUIDs
-- **Default accounts** -- pre-configured accounts for quick transaction entry
-- **Multi-currency formatting** -- proper locale-aware formatting for CAD, USD, GHS, and more
-- **Name resolution with caching** -- reference accounts, categories, and payees by name (fuzzy match supported)
-- **8 consolidated tools** -- efficient context usage for LLMs, covering all YNAB operations
+A Model Context Protocol (MCP) server for interacting with your YNAB plans at https://ynab.com
 
-## Quick Start
+In order to have an AI interact with this tool, you will need to get your Personal Access Token
+from YNAB: https://api.ynab.com/#personal-access-tokens. When adding this MCP server to any
+client, you will need to provide your personal access token as YNAB_API_TOKEN. **This token
+is never directly sent to the LLM.** It is stored privately in an environment variable for
+use with the YNAB api.
 
-### 1. Get a YNAB Personal Access Token
+A [Model Context Protocol](https://modelcontextprotocol.io) server that lets an AI
+assistant read and modify a [YNAB](https://ynab.com) plan.
 
-Go to [YNAB Developer Settings](https://app.ynab.com/settings/developer) and create a new Personal Access Token.
+The server talks to the YNAB API through the official
+[`ynab` SDK](https://github.com/ynab/ynab-sdk-js). Your Personal Access Token
+lives in an environment variable and is never sent to the model.
 
-### 2. Configure Environment Variables
+It runs two ways from one codebase:
 
-Copy `.env.example` to `.env` and fill in your tokens:
+- **Local (stdio)** — a child process of Claude Code or Claude Desktop on your
+  own machine. Simplest, but only works on that machine while it is running.
+- **Remote (Cloudflare Worker)** — deployed behind a sign-in of your choice,
+  Cloudflare Access or GitHub, and added to any MCP client that supports remote
+  servers, such as claude.ai as a custom connector, so it works from the web
+  and your phone with your computer switched off. See [DEPLOY.md](./DEPLOY.md).
 
-```bash
-cp .env.example .env
-```
+Both entry points register the shared tools from `src/registry.ts`. The Worker
+can also run an optional scheduled auto-budget service that records what it
+would categorize, approve and assign without changing your plan and delivers
+spending alerts; see
+[Auto-budget service](./DEPLOY.md#auto-budget-service-optional).
 
-**Simple setup (single account):**
+Other providers:
 
-```bash
-YNAB_API_TOKEN=your-api-token
-YNAB_BUDGET_ID=your-default-budget-id
-```
+<a href="https://glama.ai/mcp/servers/@calebl/ynab-mcp-server">
+  <img width="380" height="200" src="https://glama.ai/mcp/servers/@calebl/ynab-mcp-server/badge" alt="YNAB Server MCP server" />
+</a>
 
-**Advanced setup (multiple accounts/profiles):**
+[![LightNow](https://lightnow.ai/badge/io.github.calebl/ynab-mcp-server)](https://lightnow.ai/servers/io.github.calebl/ynab-mcp-server)
 
-```bash
-# Define profiles
-YNAB_PROFILES=personal,ammish
-YNAB_TOKEN_PERSONAL=your-personal-token
-YNAB_TOKEN_AMMISH=shared-budget-token
-YNAB_DEFAULT_PROFILE=personal
 
-# Budget aliases per profile (alias:id pairs, comma-separated)
-YNAB_BUDGETS_PERSONAL=cad:ed5ffea6-...,usd:6a8c1cd7-...,ghs:ddc0a94e-...
-YNAB_BUDGETS_AMMISH=main:abc123...
-YNAB_DEFAULT_BUDGET=cad
+## Setup
 
-# Default accounts per budget (for quick transaction entry)
-YNAB_DEFAULT_ACCOUNT_CAD=RBC Chequing
-YNAB_DEFAULT_ACCOUNT_USD=RBC US Checking
-```
-
-### 3. Build and Run
+Get a Personal Access Token from <https://api.ynab.com/#personal-access-tokens>, then:
 
 ```bash
 npm install
 npm run build
-npm start
 ```
 
-### 4. Connect to Claude Desktop or Claude Code
+Environment variables:
 
-**Claude Desktop (`claude_desktop_config.json`):**
+| Variable | Required | Purpose |
+| --- | --- | --- |
+| `YNAB_API_TOKEN` | yes | Personal Access Token used for every API call |
+| `YNAB_PLAN_ID` | no | Default plan, so tools can omit `planId`. Find it with `ynab_list_plans`. |
+| `TYPESAFE_API_KEY` | no | Operator-owned TypeSafe credential. Required, but not sufficient, to enable category suggestions. |
+| `YNAB_AI_CATEGORIZATION` | no | Set to `"true"` together with `TYPESAFE_API_KEY` to expose the opt-in suggestion tool. |
+| `YNAB_AI_TYPICAL_PAYEES` | no | Set to `"true"` to send each category's most frequent payee names from the last 12 months with each model request. Off by default because it discloses aggregated payee history to TypeSafe. |
+| `YNAB_READ_ONLY` | no | Set to `"true"` (case-insensitive; surrounding whitespace is ignored) to remove tools that write to YNAB, in the stdio server, the HTTP server and the Worker. |
+| `YNAB_MCP_HOST`, `PORT` | no | HTTP server only. Address and port to listen on; default `127.0.0.1` and `3000`. |
+| `YNAB_MCP_ALLOWED_ORIGINS` | no | HTTP server only. Comma-separated browser origins allowed to call `/mcp` (e.g. `https://app.example.com`). Each entry is reduced to scheme, host and port, so a trailing slash is ignored. Empty by default, which refuses every request that carries an `Origin` header. |
+| `YNAB_MCP_ALLOWED_HOSTS` | no | HTTP server only. Comma-separated extra `Host` hostnames accepted while listening on a loopback address, for a reverse proxy on the same machine that forwards the client's `Host` (e.g. `mcp.example.com`). |
+| `ALLOWED_GITHUB_LOGIN` | no | Worker only. The single GitHub login allowed through [GitHub sign-in](./DEPLOY.md#github-sign-in). Required for GitHub sign-in. |
+| `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET` | no | Worker only. The GitHub OAuth app's credentials. Required for GitHub sign-in. |
+| `ALLOWED_REDIRECT_URIS` | no | Worker only. Exact OAuth callback URIs that GitHub sign-in may deliver grants to. See [Restricting redirects](./DEPLOY.md#restricting-redirects-optional). Must be unset with Cloudflare Access. |
+| `CF_ACCESS_TEAM_DOMAIN` | no | Worker only. Your Cloudflare Access team domain (`<team>.cloudflareaccess.com`). Setting any `CF_ACCESS_*` value replaces GitHub sign-in with [Cloudflare Access](./DEPLOY.md#cloudflare-access), which needs all three. |
+| `CF_ACCESS_AUD` | no | Worker only. The Access application's Audience (AUD) tag. |
+| `CF_ACCESS_ALLOWED_EMAIL` | no | Worker only. The single email allowed through Access. Any other identity, including a service token, is refused. |
+
+### Local: Claude Desktop / Claude Code
 
 ```json
 {
   "mcpServers": {
     "ynab": {
       "command": "node",
-      "args": ["/path/to/ynab-mcp/dist/index.js"],
+      "args": ["/absolute/path/to/ynab-mcp-server/dist/index.js"],
       "env": {
-        "YNAB_API_TOKEN": "your-api-token",
-        "YNAB_BUDGET_ID": "your-budget-id"
+        "YNAB_API_TOKEN": "your-token",
+        "YNAB_PLAN_ID": "your-plan-id"
       }
     }
   }
 }
 ```
 
-**Claude Code (`.mcp.json`):**
+### Self-hosted: streamable HTTP
 
-```json
-{
-  "mcpServers": {
-    "ynab": {
-      "command": "node",
-      "args": ["/path/to/ynab-mcp/dist/index.js"],
-      "env": {
-        "YNAB_PROFILES": "personal",
-        "YNAB_TOKEN_PERSONAL": "your-token",
-        "YNAB_BUDGETS_PERSONAL": "main:your-budget-uuid",
-        "YNAB_DEFAULT_PROFILE": "personal",
-        "YNAB_DEFAULT_BUDGET": "main"
-      }
-    }
-  }
-}
+To run the server in a container or behind your own reverse proxy or MCP
+gateway, start the HTTP entry point instead of the stdio one.
+
+> **It does no authentication of its own.** Anyone who can reach `/mcp` uses
+> your YNAB token with every tool you expose, including the write tools
+> unless `YNAB_READ_ONLY` is set. It listens on `127.0.0.1` unless you set
+> `YNAB_MCP_HOST`; only widen that on a private network or behind a proxy
+> that authenticates callers. For a hosted endpoint with sign-in built in,
+> use the Worker below.
+
+On this machine only:
+
+```sh
+npm run build
+YNAB_API_TOKEN=your-token npm run start:http
 ```
 
-## Available Tools (8 Consolidated)
+Outside a checkout, name the package as well as the command, so npm never
+looks up a package called `ynab-mcp-server-http`:
 
-All tools accept optional `profile` and `budget` parameters. Defaults are used when not specified.
-
-### Read Tools
-
-#### `ynab_budgets`
-
-Budget and profile operations.
-
-| Action | Description |
-|--------|-------------|
-| `list` | List all budgets for a profile, including configured aliases |
-| `get` | Get budget details with month summary (income, activity, to-be-budgeted) and account list |
-| `months` | List all budget months with income, budgeted, activity, and age of money |
-| `profiles` | List all configured profiles and their budgets |
-
-Parameters: `action`, `profile?`, `budget?`, `month?`
-
-#### `ynab_accounts`
-
-Account read operations.
-
-| Action | Description |
-|--------|-------------|
-| `list` | List accounts with optional filters (type, on_budget, include_closed) |
-| `get` | Get single account details including note and last reconciled date |
-| `balances` | Quick balance summary with net worth, total assets, and total liabilities |
-
-Parameters: `action`, `profile?`, `budget?`, `account?`, `type?`, `on_budget?`, `include_closed?`
-
-#### `ynab_transactions_read`
-
-Transaction query operations.
-
-| Action | Description |
-|--------|-------------|
-| `list` | Filter transactions by date range, account, category, payee, memo, status, amount range |
-| `search` | Fuzzy search by payee name or memo content |
-| `unapproved` | Get pending/unapproved transactions |
-| `scheduled` | List recurring/scheduled transactions with frequency and next date |
-| `spending_by_category` | Net spending per category for `since_date`..`until_date` (default: this month), top `limit` rows |
-| `spending_by_payee` | Net spending per payee, same options |
-| `cash_flow` | Inflow, outflow and net per month for the last `months` (default 6) or `since_date`..`until_date` |
-
-Spending reports count split transactions by leg (never as "Split") and leave transfers between accounts out. `spending_by_*` also leave out Ready to Assign inflows and net refunds against spending.
-
-Parameters: `action`, `profile?`, `budget?`, `account?`, `category?`, `month?`, `since_date?`, `until_date?`, `payee?`, `memo?`, `status?`, `type?`, `min_amount?`, `max_amount?`, `limit?`, `months?`
-
-#### `ynab_categories_read`
-
-Category query operations.
-
-| Action | Description |
-|--------|-------------|
-| `list` | List all categories grouped by category group, with budget/activity/balance totals |
-| `get` | Get category details for a specific month, including goal progress |
-
-Parameters: `action`, `profile?`, `budget?`, `category?`, `month?`, `include_hidden?`
-
-### Write Tools
-
-#### `ynab_transactions_write`
-
-Transaction mutation operations.
-
-| Action | Description |
-|--------|-------------|
-| `create` | Create a transaction with optional split categories. Uses default account if none specified |
-| `update` | Update an existing transaction (amount, payee, category, memo, date, status) |
-| `delete` | Delete a transaction by ID |
-| `approve` | Approve or unapprove a transaction |
-| `bulk_approve` | Approve multiple transactions at once by IDs |
-| `adjust` | Create a balance adjustment for tracking accounts (specify target balance) |
-| `import` | Trigger import of transactions from linked financial institutions |
-| `suggest_categories` | Suggest a category for each uncategorized transaction: the most common category you have used for the same payee. History only, read-only, nothing leaves YNAB. Each suggestion carries an `expected_content_fingerprint` |
-| `apply_category_suggestions` | Apply `suggestions[{transaction_id, category_id, expected_content_fingerprint}]` in one bulk update. **Preview only by default**: writes only when `dry_run` is explicitly `false`. Skips any transaction that changed (fingerprint mismatch), was deleted, or is already categorized |
-
-Parameters: `action`, `profile?`, `budget?`, `account?`, `transaction_id?`, `amount?`, `payee?`, `category?`, `memo?`, `date?`, `cleared?`, `approved?`, `splits?`, `transaction_ids?`, `since_date?`, `limit?`, `suggestions?`, `dry_run?`
-
-#### `ynab_categories_write`
-
-Category mutation operations.
-
-| Action | Description |
-|--------|-------------|
-| `update` | Set the budgeted amount for a category in a specific month |
-| `move` | Move funds between categories (validates sufficient funds; if the second write fails, the error says which category was already changed) |
-| `auto_assign` | Fill underfunded goals from Ready to Assign, biggest gap first, never exceeding `max_total` or Ready to Assign. **Preview only by default**: it writes nothing unless `dry_run` is explicitly `false` |
-
-Parameters: `action`, `profile?`, `budget?`, `category?`, `from_category?`, `to_category?`, `amount?`, `month?`, `dry_run?`, `max_total?`
-
-#### `ynab_accounts_write`
-
-Account mutation operations.
-
-| Action | Description |
-|--------|-------------|
-| `create` | Create a new account with type and starting balance |
-| `reconcile` | Reconcile an account to a confirmed balance (creates adjustment transaction if needed) |
-
-Parameters: `action`, `profile?`, `budget?`, `account?`, `name?`, `type?`, `balance?`, `note?`
-
-#### `ynab_payees`
-
-Payee operations.
-
-| Action | Description |
-|--------|-------------|
-| `list` | List payees with optional search filter |
-| `get` | Get payee details with 5 most recent transactions |
-| `update` | Rename a payee |
-
-Parameters: `action`, `profile?`, `budget?`, `payee?`, `new_name?`, `search?`, `limit?`
-
-## Usage Examples
-
-```typescript
-// List all configured profiles
-ynab_budgets({ action: "profiles" })
-
-// Get budget summary for current month
-ynab_budgets({ action: "get", budget: "cad" })
-
-// List budget months with income/activity history
-ynab_budgets({ action: "months", budget: "cad" })
-
-// Get balance summary with net worth
-ynab_accounts({ action: "balances", budget: "usd" })
-
-// Create transaction using default account
-ynab_transactions_write({
-  action: "create",
-  amount: -45.99,
-  payee: "Grocery Store",
-  category: "Groceries"
-})
-
-// Create split transaction
-ynab_transactions_write({
-  action: "create",
-  amount: -100,
-  payee: "Costco",
-  splits: [
-    { amount: -60, category: "Groceries" },
-    { amount: -40, category: "Household Goods" }
-  ]
-})
-
-// Search transactions by payee
-ynab_transactions_read({
-  action: "search",
-  payee: "coffee",
-  since_date: "2025-01-01"
-})
-
-// Get scheduled/recurring transactions
-ynab_transactions_read({ action: "scheduled" })
-
-// Approve multiple transactions at once
-ynab_transactions_write({
-  action: "bulk_approve",
-  transaction_ids: ["id-1", "id-2", "id-3"]
-})
-
-// Import from linked bank accounts
-ynab_transactions_write({ action: "import" })
-
-// Where did the money go this month? And the last 6 months of cash flow
-ynab_transactions_read({ action: "spending_by_category", limit: 10 })
-ynab_transactions_read({ action: "cash_flow", months: 6 })
-
-// Categorize from your own history: suggest, preview, then apply
-ynab_transactions_write({ action: "suggest_categories", limit: 20 })
-ynab_transactions_write({
-  action: "apply_category_suggestions",
-  suggestions: [{ transaction_id: "id-1", category_id: "cat-1", expected_content_fingerprint: "..." }]
-})  // preview; add dry_run: false to write
-
-// Move money between categories
-ynab_categories_write({
-  action: "move",
-  from_category: "Dining Out",
-  to_category: "Groceries",
-  amount: 50
-})
-
-// Preview, then apply, auto-assigning Ready to Assign to underfunded goals (max $500)
-ynab_categories_write({ action: "auto_assign", max_total: 500 })
-ynab_categories_write({ action: "auto_assign", max_total: 500, dry_run: false })
-
-// Reconcile an account
-ynab_accounts_write({
-  action: "reconcile",
-  account: "RBC Chequing",
-  balance: 1234.56
-})
-
-// Switch to a different profile
-ynab_budgets({ action: "list", profile: "ammish" })
+```sh
+YNAB_API_TOKEN=your-token npx --package ynab-mcp-server ynab-mcp-server-http
 ```
 
-## Human-Friendly Features
+In a container, where it must listen on every interface, start read-only
+unless whatever sits in front of it authenticates callers:
 
-- **Amounts in dollars** -- Input `-45.99`, output `$45.99 CAD` (not milliunits)
-- **Name resolution** -- Use `"RBC Chequing"` instead of account UUIDs. Supports fuzzy matching.
-- **Budget aliases** -- Use `"cad"` instead of full budget IDs
-- **Smart defaults** -- Profile, budget, and account all default from configuration
-- **Multi-currency** -- Locale-aware formatting for CAD, USD, GHS, and other currencies
-- **Cached lookups** -- Account, category, and payee name-to-ID resolution is cached for 5 minutes to reduce API calls
-
-## Architecture
-
-```
-src/
-├── index.ts                    # MCP server entry point, tool registration
-├── config.ts                   # Multi-profile configuration from env vars
-├── utils/
-│   ├── profile-manager.ts      # YNAB API client per profile, budget resolution
-│   ├── resolver.ts             # Name-to-ID resolution with 5-minute TTL cache
-│   └── formatter.ts            # Currency formatting, milliunit conversion, response helpers
-└── tools/
-    ├── ynab-budgets.ts             # Budget and profile operations
-    ├── ynab-accounts.ts            # Account read operations
-    ├── ynab-accounts-write.ts      # Account mutations (create, reconcile)
-    ├── ynab-transactions-read.ts   # Transaction queries and search
-    ├── ynab-transactions-write.ts  # Transaction mutations (CRUD, approve, import)
-    ├── ynab-categories-read.ts     # Category queries
-    ├── ynab-categories-write.ts    # Category mutations (budget, move funds)
-    └── ynab-payees.ts              # Payee operations
+```sh
+YNAB_API_TOKEN=your-token YNAB_READ_ONLY=true YNAB_MCP_HOST=0.0.0.0 PORT=3000 node dist/http.js
 ```
 
-Each tool module exports `name`, `description`, `inputSchema` (Zod), and an `execute` function. Tools are registered in `index.ts` which validates configuration on startup and logs loaded profiles.
+It serves stateless [streamable HTTP](https://modelcontextprotocol.io/specification/2025-06-18/basic/transports#streamable-http)
+at `POST /mcp` and a health check at `GET /healthz`, with the same tools and
+environment variables as the stdio server. It holds one YNAB client for the
+life of the process, so the plan-settings cache is shared across requests.
+Bound to a non-loopback address with the write tools on, it prints a warning
+at startup.
 
-## Environment Variables Reference
+To stop a web page reaching it through DNS rebinding, `/mcp` refuses with a
+403 any request that carries an `Origin` header not listed in
+`YNAB_MCP_ALLOWED_ORIGINS`. Browsers always send `Origin` on a POST;
+gateways and server-side MCP clients do not, so they are unaffected. While it
+listens on a loopback address it also refuses any request whose `Host` is not
+`localhost`, `127.0.0.1` or `[::1]`.
 
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `YNAB_API_TOKEN` | Yes* | Single-profile API token |
-| `YNAB_BUDGET_ID` | No | Default budget ID (single-profile mode) |
-| `YNAB_PROFILES` | Yes* | Comma-separated profile names (multi-profile mode) |
-| `YNAB_TOKEN_{PROFILE}` | Yes* | API token per profile (e.g., `YNAB_TOKEN_PERSONAL`) |
-| `YNAB_BUDGETS_{PROFILE}` | No | Budget aliases per profile (`alias:uuid,...`) |
-| `YNAB_DEFAULT_PROFILE` | No | Default profile name |
-| `YNAB_DEFAULT_BUDGET` | No | Default budget alias |
-| `YNAB_DEFAULT_ACCOUNT_{BUDGET}` | No | Default account name per budget alias |
+A reverse proxy on the same machine usually forwards the client's `Host`
+(Caddy and Traefik by default, nginx with `proxy_set_header Host $host`), which
+that check refuses with `403 Host not allowed`. Either have the proxy send the
+upstream address as `Host` (Caddy: `header_up Host {upstream_hostport}`;
+nginx's default `$proxy_host` already does), or list the public hostname in
+`YNAB_MCP_ALLOWED_HOSTS`.
 
-\* Either `YNAB_API_TOKEN` (single-profile) or `YNAB_PROFILES` + `YNAB_TOKEN_*` (multi-profile) is required.
+### Remote: Cloudflare Worker
+
+The stdio server above cannot be reached from a phone. To use these tools from
+claude.ai, the Claude mobile app, or another MCP client that supports remote
+servers, deploy `src/worker/` to Cloudflare Workers and add its `/mcp` URL to
+the client. The Worker is not tied to Claude. [DEPLOY.md](./DEPLOY.md) has the
+full walk through; the shape of it:
+
+1. Copy `wrangler.example.jsonc` to the git-ignored `wrangler.jsonc`, remove
+   the optional placeholder `AUTOBUDGET_DB` block unless you are configuring
+   the [auto-budget service](./DEPLOY.md#auto-budget-service-optional), and
+   run `npx wrangler login`
+2. Set up one of the two sign-ins below
+3. Use `npx wrangler secret put` for `YNAB_API_TOKEN`, and optionally
+   `YNAB_PLAN_ID`. `TYPESAFE_API_KEY` is optional too, needed only for
+   [category suggestions](./DEPLOY.md#3-set-deployment-values-and-secrets)
+4. Run `npm run deploy`
+5. Add `https://<host>/mcp` to your MCP client, for example as a custom
+   connector in claude.ai, and complete the sign-in it opens
+
+#### Sign-in: Cloudflare Access
+
+For a Cloudflare account that uses Access. Access signs the client in at
+Cloudflare's edge, so no GitHub OAuth app or `OAUTH_KV` namespace is needed.
+Full steps: [Cloudflare Access](./DEPLOY.md#cloudflare-access).
+
+1. Remove the `kv_namespaces` block from `wrangler.jsonc`, and deploy once
+   so the Worker exists
+2. Create an Access application for the Worker with an Allow policy for your
+   email and Managed OAuth on, listing each client's callback URI, with
+   `npm run cf-access` ([setup script](./DEPLOY.md#setup-script)) or in the
+   dashboard
+3. Use `npx wrangler secret put` for `CF_ACCESS_TEAM_DOMAIN`, `CF_ACCESS_AUD`,
+   and `CF_ACCESS_ALLOWED_EMAIL`, and leave `ALLOWED_REDIRECT_URIS` unset
+
+#### Sign-in: GitHub
+
+The Worker runs its own OAuth flow with GitHub as the identity provider.
+Full steps: [GitHub sign-in](./DEPLOY.md#github-sign-in).
+
+1. Create the `OAUTH_KV` namespace and put its ID in `wrangler.jsonc`
+2. `npm run deploy` once to learn your `*.workers.dev` hostname
+3. Create a GitHub OAuth app whose callback is `https://<host>/callback`
+4. Use `npx wrangler secret put` for `ALLOWED_GITHUB_LOGIN`,
+   `GITHUB_CLIENT_ID`, and `GITHUB_CLIENT_SECRET`
+
+#### Who may connect
+
+The YNAB token stays a Worker secret and never reaches the client. The sign-in
+controls **who may connect** to the remote Worker; the YNAB Personal Access
+Token controls **which YNAB account it reaches**. They answer different
+questions, and neither substitutes for the other. The Worker uses one
+server-wide YNAB token, so anyone admitted through the sign-in reaches the
+deployer's YNAB account, money, and every plan available to that token—not
+their own YNAB account.
+`ynab_list_plans` lists all of those plans, and a caller-supplied `planId`
+overrides the optional `YNAB_PLAN_ID` default. This matters because the tool
+set can create and delete transactions—an unauthenticated endpoint would grant
+access to those plans to anyone who found the URL. Each sign-in admits one
+account:
+
+- **Cloudflare Access** admits only `CF_ACCESS_ALLOWED_EMAIL`; the Access
+  application's allowed redirect URIs decide which clients can connect. See
+  [Cloudflare Access](./DEPLOY.md#cloudflare-access) for its configuration and
+  client compatibility notes.
+- **GitHub** admits only `ALLOWED_GITHUB_LOGIN`. Each sign-in shows an approval
+  page naming the client and callback address, and `ALLOWED_REDIRECT_URIS` can
+  restrict clients to exact callbacks. See
+  [Approving MCP clients](./DEPLOY.md#approving-mcp-clients).
+
+Any MCP client that supports remote servers with OAuth can connect, for
+example Claude, ChatGPT connectors, Claude Code, or the MCP Inspector.
+
+## Why not YNAB OAuth?
+
+YNAB OAuth is deliberately not supported. Its token exchange requires a client
+secret even with PKCE; an open-source package cannot ship a secret, so a local
+package cannot honestly implement the authorization-code flow
+([OAuth application requirements](https://api.ynab.com/#oauth-applications)).
+The only secretless flow YNAB documents is the implicit grant, which expires in
+two hours with no refresh
+([OAuth application requirements](https://api.ynab.com/#oauth-applications)).
+YNAB recommends a Personal Access Token for an individual accessing their own
+account
+([Personal Access Tokens](https://api.ynab.com/#personal-access-tokens)).
+
+Setting `YNAB_READ_ONLY` to `"true"` drops every YNAB write tool from the tool
+list, which is worth considering for a connector you will mostly use on a phone.
+
+## Tools
+
+Plan-scoped tools take an optional `planId` that falls back to
+`YNAB_PLAN_ID`. Optional tool inputs may be `null`; the server treats `null`
+the same as omitting that input. All monetary values — in both directions — are
+plain currency amounts, never YNAB's milliunits. Reported amounts use the
+plan currency's precision (three decimals for currencies such as the Kuwaiti
+dinar) and fall back to two decimals if its settings cannot be read; conversion
+happens in `src/tools/money.ts`.
+
+### Reading
+
+| Tool | What it does |
+| --- | --- |
+| `ynab_list_plans` | Every plan on the account. Run this first to find a plan ID. |
+| `ynab_plan_summary` | A month at a glance: income, budgeted, activity, Ready to Assign, plus categories split into `overspent`, `underfunded` (goal not yet met) and `positive_balance`. Hidden and deleted categories are excluded. `budgetVsActuals: true` adds a `budget_vs_actuals` block: `budgeted`, `activity`, `balance`, `variance` (budgeted plus activity) and `percent_used` (null when nothing was assigned) per category, subtotalled per category group and in `totals`. Credit Card Payments is listed as its own group but left out of `totals`, since its activity is card spending moving in minus payments going out. YNAB's internal Inflow: Ready to Assign category (whose activity is the month's income) is skipped; other internal categories, such as Uncategorized, are listed and counted when they have activity. |
+| `ynab_list_accounts` | Accounts with balances. `includeClosedAccounts` to see closed ones. |
+| `ynab_list_categories` | Categories grouped by category group, with goal info. |
+| `ynab_list_payees` | Payees, for resolving payee IDs. |
+| `ynab_list_months` | Every plan month since the plan began, with raw income, budgeted, activity, Ready to Assign, age-of-money and note fields. For recent income versus spending, use `ynab_cash_flow`. |
+| `ynab_list_scheduled_transactions` | The scheduled transactions set up in YNAB. For recurring charges found in transaction history, see `ynab_detect_recurring`; for a projected balance, `ynab_balance_forecast`. |
+| `ynab_get_transactions` | Transactions optionally filtered to `sinceDate`–`untilDate`, by `type` (`all`/`uncategorized`/`unapproved`), and by at most one of `accountId`, `categoryId` or `payeeId` (the first in that order wins). To search, add `payeeContains`, `memoContains` (case-insensitive), `minAmount`/`maxAmount` (ignoring sign) or `direction` (`outflow`/`inflow`/`any`); any search option or `untilDate` adds a `totals` block (`count`, `inflow`, `outflow`, `net`) over every match, including transfers between accounts, and `totalsOnly: true` returns only that. Without `categoryId` or `payeeId`, splits are matched leg by leg and the totals count only the matching legs; with them, rows are matched as YNAB returns them, so a split's parent row in the payee listing counts at its full amount. Rows come back newest first; `limit` defaults to 100, keeps the most recent rows, and does not affect the totals. |
+| `ynab_suggest_categories` | Opt-in, read-only category previews for unapproved, uncategorized ordinary outflows. Deleted and categorized rows are dropped in default mode; approved, reconciled, balance-adjustment, transfer, split, and inflow rows are skipped as applicable. |
+
+### Category suggestions (optional)
+
+`ynab_apply_category_suggestions` is a separate write tool that is available
+without enabling the TypeSafe preview. Provide up to 25 explicit
+`transaction_id`, `category_id`, and `expected_content_fingerprint` rows. The
+tool refetches each transaction and rejects stale or ineligible changes; a retry
+whose category is already applied is a no-op. It supports validation-only dry
+runs and returns a pre-write undo manifest, but does not perform the undo. It
+never auto-applies suggestions, calls TypeSafe, or approves transactions.
+
+`ynab_suggest_categories` is off by default. To expose it, set both an
+operator-owned `TYPESAFE_API_KEY` and `YNAB_AI_CATEGORIZATION=true`, then restart
+the server. The API key is read from the environment (or a Worker secret), never
+from a tool argument. Omit `transactionIds`, pass `null`, or pass an empty
+array to fetch unapproved transactions and retain only uncategorized rows;
+provide IDs to inspect only those transactions. In default mode, the tool
+checks every retained row for deterministic eligibility and then applies
+`limit` to the first eligible outflows in YNAB's returned order. Skipped rows
+do not consume the limit.
+
+The tool is a dry-run preview: it never writes to YNAB, approves a transaction,
+or changes the behavior of `ynab_update_transaction`. It first handles exact
+facts in code—dropping deleted rows and handling approved or reconciled rows,
+YNAB balance adjustments, transfers, splits, inflows, existing categories, and
+hidden/internal categories. In default mode, `transactions` contains only the
+eligible rows inspected, `transaction_count` is that row count, and
+`eligible_transaction_count` reports all eligible rows available before the
+limit. The top-level `skipped` object reports `total_count` and a `count` plus
+`transaction_ids` for each reason: `skipped_approved`, `skipped_reconciled`,
+`skipped_balance_adjustment`, `skipped_transfer`, `skipped_split`,
+`skipped_inflow`, and `skipped_already_categorized`. With explicit
+`transactionIds`, every non-deleted fetched row remains an individual result,
+including rows carrying a `skipped_*` status; deleted rows are omitted.
+Payee history uses the latest 12 months, capped at 50 qualifying rows. When the
+payee has no qualifying rows with the same payee ID, history falls back to rows
+from payees with a similar name: after Unicode NFC normalization, lowercasing,
+and removing everything except letters and numbers, one name begins the other
+and the shorter is at least six characters, so a truncated bank payee such as
+"Better Bl" draws on "Better Blend" history. Each history summary reports
+`match` (`payee`, `similar_payee_name`, or `null`) and
+`matched_payee_names`.
+
+Each eligible row is then routed in this order, and `source` names the step
+that answered:
+
+1. **Exact-payee history (`history_rule`).** When at least one qualifying row
+   has the same payee ID and every such row uses the same still-eligible
+   category, that category is `suggested`. When those rows disagree, the row is
+   `needs_review` and proposes the most recently used category, with the
+   others as `top_alternatives` carrying their `history_count`. No model call is
+   made for either case.
+2. **Personal prior (`personal_prior`).** A naive-Bayes classifier is trained
+   for each request on the plan's own categorized ordinary outflows from the
+   same 12-month history, using payee and bank-import name tokens, the account,
+   and a coarse amount bucket. It is used when history contains categorized
+   rows across at least two categories; a single-category prior cannot rank
+   alternatives. Name tokens never seen in training are ignored rather than
+   scored. When its top category reaches probability 0.9, the row is
+   `suggested` without a model call. The probability is reported under
+   `personal_prior.ranking`, never as `model_confidence`. Below 0.9 the prior
+   only ranks: its top three appear on the model's row for comparison.
+3. **Model (`jev`).** Every remaining row goes to TypeSafe's pinned
+   `jev-1.13.0` System One model in batches of ten. A model answer is a ranked
+   shortlist, never a suggestion: every answer that names a category is
+   `needs_review`, while an explicit model abstention is `left_uncategorized`.
+   The pinned model's stored review threshold is therefore 0; thresholds stay
+   model-specific because confidence scales differ between models.
+
+Similar-name history is never a rule; when a row reaches the model, it is
+included as suggestive evidence. The history summary's `reference_category_id` is the category a
+proposal is compared with: the most recently used one for exact-payee history,
+and the plurality for similar-name history. A similar-name disagreement is
+reported as `conflict` but does not change the status, because a prefix match
+does not establish merchant identity. Every inspected eligible row includes a
+status, source, content fingerprint, proposed category, model confidence and
+winning probability (model rows only), up to three alternatives, the history
+summary, and the personal-prior ranking where one was computed. The response's
+`thresholds` object reports the values in force, and `personal_prior` reports
+how many rows trained the prior and whether it was available for routing.
+Applying a suggestion remains a separate, explicit human decision using
+`ynab_apply_category_suggestions` (or the general `ynab_update_transaction`
+tool).
+
+Why this order: households file payees their own way, such as restaurants
+under a groceries category or clinics under a savings category. A
+general-purpose model cannot know that, but the plan's own history encodes it.
+On real household history, history rules and the personal prior were much more
+accurate than a model on the same rows. The model's high-confidence answers
+were wrong far more often than on synthetic fixtures, which is why they are
+review-only. To evaluate your own plan, or a local model, see
+[Evaluating categorization and local decision models](./docs/local-decision-model.md).
+
+Enabling this feature sends the transaction's display payee, imported/original
+payee, memo, amount, date, and account name/type/on-budget status, plus visible
+category group and category names, to **TypeSafe as a third-party processor**.
+For model-bound rows with similar-name matches, it also sends the matched payee
+names and per-category key, group, name, and count. When
+`YNAB_AI_TYPICAL_PAYEES=true`, each model request also lists up to eight of each
+category's most frequent payee names from the last 12 months
+(`typical_payees`), and the response sets
+`typical_payees_sent: true`. This makes the model noticeably more accurate on a
+household's own filing habits, but it discloses aggregated payee history, so it
+is off by default. It does not send YNAB UUIDs, balances, goals,
+approval/cleared state, or raw transaction history. Rows answered by history or
+the personal prior are never sent. TypeSafe's published
+Jev 1.13 price at the time of this release is **$0.042 per million input tokens;
+output tokens are free**. The tool returns preflight estimates, actual token
+usage, and projected cost on each run
+and refuses requests over its per-call token/cost ceilings. Pricing and
+provider limits can change; check <https://docs.typesafe.ai/models>.
+
+The prototype is intentionally narrow and not default-on. Its original
+98.3% exact-label, 98.9% top-three, and 60/60 expected-abstention results came
+from 40 synthetic, single-evaluator fixtures, not a production accuracy claim.
+Real household history is much harder, as described above.
+
+### Reporting
+
+In the spending reports, splits are counted through their subtransactions and
+transfers between your own accounts are excluded, so they report spending rather
+than money movement.
+
+| Tool | What it does |
+| --- | --- |
+| `ynab_spending_by_category` | Total spend per category over a date range, biggest first, with share of total. Defaults to the last 30 days. With `monthly: true`, each category also gets spend per calendar month, its mean over the full months, and its last full month's change against the earlier full months, over the last `months` months (default 6, at most 24) or from `sinceDate`, which overrides `months`; `untilDate` then defaults to today. Totals are gross outflows, so refunds aren't netted. |
+| `ynab_spending_by_payee` | The same, grouped by merchant, including `monthly`. |
+| `ynab_cash_flow` | Income vs spending per month with the running net, from YNAB's own monthly totals. Defaults to the last 6 months. |
+| `ynab_balance_forecast` | The combined balance of your accounts over the next `days` (default 30, max 365, from today in UTC), projected from scheduled transactions only: starting balance, the scheduled events, the end-of-day running balance, the lowest point and the ending balance. `accountIds` picks the accounts; the default is every open on-budget account. `limit` caps the events (default 100, `0` leaves them out); `event_count`, the running balance, low point and ending balance always cover every event. Transfers between two included accounts (credit card payments too) net to zero; a transfer to an account outside the forecast counts as money leaving, and one from such an account as money arriving. Splits are counted leg by leg. Occurrences whose date has passed but that YNAB hasn't entered yet count on the first day, marked `overdue` with their `scheduled_date` and summarised in `overdue_schedules`. A twice-a-month schedule's second date is approximated as 15 days after the first when YNAB doesn't give it, and marked `approximate`. |
+| `ynab_detect_recurring` | Recurring outflows such as subscriptions and bills: a payee's charges of a similar amount at a regular interval (weekly to yearly), with typical amount, yearly cost at the latest amount, next expected date, whether it seems to have stopped, and whether a scheduled transaction has the same payee name. Loan and mortgage payments are transfers, so they are not included, and refunds are not netted. A heuristic; defaults to the last 365 days. |
+
+### Writing
+
+| Tool | What it does |
+| --- | --- |
+| `ynab_create_transaction` | Creates a transaction. Needs `date`, `amount`, an account (`accountId` or `accountName`) and a payee (`payeeId` or `payeeName`); category optional as `categoryId` or `categoryName`, or `subtransactions` to split it. |
+| `ynab_update_transaction` | Updates any subset of an existing transaction's fields, or splits an unsplit one with `subtransactions`. |
+| `ynab_delete_transaction` | Deletes a transaction. Not undoable. |
+| `ynab_bulk_approve_transactions` | Approves an array of transaction IDs in one API call, or un-approves them with `approved: false`. |
+| `ynab_apply_category_suggestions` | Applies up to 25 explicit category suggestions with refetch and stale-data checks, dry-run support, and a pre-write undo manifest. Never auto-applies or approves transactions. |
+| `ynab_update_category_budget` | Sets the total budgeted amount for one category in a month. Not an increment; use `ynab_move_money` to move money between categories. |
+| `ynab_import_transactions` | Triggers an import from linked institutions, the same as hitting Import in the YNAB app. |
+| `ynab_move_money` | Moves budgeted money between two categories in a month, for covering overspending. |
+| `ynab_auto_assign` | Spreads Ready to Assign over categories with unmet monthly goals, largest shortfall first. `dryRun` to preview, `maxTotal` to cap it. |
+
+#### Names instead of IDs
+
+`ynab_create_transaction` accepts `accountName` and `categoryName` and matches
+them loosely against the plan, so "ally checking" finds *Ally Checking*.
+Closed accounts and hidden categories are never matched. If a name is ambiguous
+or unrecognised the call fails and names the near misses rather than guessing,
+and successful calls echo back `matchedAccount` / `matchedCategory` so a wrong
+guess is visible.
+
+#### Split transactions
+
+`ynab_create_transaction` and `ynab_update_transaction` split a transaction
+across categories when given `subtransactions`: two or more entries of
+`{ amount, category_name, payee_name, memo }`, the same shape
+`ynab_get_transactions` returns for a split. Amounts are in dollars and must add
+up to the transaction amount exactly (on update, the new `amount` if given,
+otherwise the current one); categories go on the splits, not on the parent.
+Split category names are matched like `categoryName` and echoed back as
+`matchedSplitCategories`.
+
+YNAB cannot change the splits of a transaction that is already split, so
+`ynab_update_transaction` refuses rather than silently dropping the change.
+Delete and recreate the transaction to re-split it.
+
+#### Writes that can half-succeed
+
+YNAB has no endpoint for moving money between categories, so `ynab_move_money`
+rewrites both categories' budgeted amounts in two calls. It takes from the
+source first, so a failure in between leaves the money in Ready to Assign rather
+than double-counted. When that happens the response sets `partial: true` and
+carries a `recovery` line with the original amount to restore. `ynab_auto_assign`
+behaves the same way: on failure it reports which categories were already funded
+and which were left alone.
+
+Tools never throw at the protocol level. Failures come back as an MCP error
+result (`isError: true`) with `{ "success": false, "error": "..." }` in the
+text content, so a failed write is never mistaken for a successful one.
+
+#### Tool annotations
+
+Every tool advertises MCP annotations (`readOnlyHint`, `destructiveHint`,
+`idempotentHint`, `openWorldHint`) alongside its schema. Tools that change
+neither YNAB nor the Worker's service state are `readOnlyHint: true`; among the
+YNAB writing tools, only `ynab_delete_transaction` sets `destructiveHint: true`.
+A client may use these hints to decide which calls need a confirmation prompt.
+
+#### `cleared` and `flagColor`
+
+`ynab_create_transaction` and `ynab_update_transaction` accept `cleared` as
+one of `cleared`, `uncleared`, or `reconciled`, and `flagColor` as one of
+`red`, `orange`, `yellow`, `green`, `blue`, `purple`, or `""` to clear an
+existing flag.
 
 ## Development
 
 ```bash
-npm install              # Install dependencies
-npm run build            # Compile TypeScript to ./dist
-npm start                # Start the MCP server
-npm run watch            # Development build with file watching
-npm run debug            # Debug with MCP Inspector
-npm test                 # Run tests (vitest)
-npm run test:watch       # Run tests with file watching
-npm run test:coverage    # Run tests with coverage report
+npm run watch          # rebuild on change
+npm test               # vitest (watch mode)
+npm run test:run       # vitest, single run
+npm run test:coverage  # coverage report
+npm run typecheck      # typecheck both the node and Worker targets
+npm run debug          # build, then open the MCP inspector
+npm run dev:worker     # run the Worker locally with wrangler
+npm run deploy         # deploy the Worker to Cloudflare
 ```
 
-### Adding a New Tool
+`dist/` is a build artifact and is not tracked in git; `npm run build` regenerates it.
 
-1. Create `src/tools/my-tool.ts` following the module pattern:
+### Releasing
 
-```typescript
-import { z } from "zod";
-import { getApiClient, resolveBudgetId } from "../utils/profile-manager.js";
-import { createResponse, createErrorResponse } from "../utils/formatter.js";
+Bump the version in `package.json` and update `CHANGELOG.md`, then merge to `main` and create a GitHub release tagged in the existing `0.2.0` style (without a `v` prefix). The workflow stages that release with npm; it does not make the package public. The maintainer must run `npm stage list`, review it, and run `npm stage approve` with 2FA to promote it live. Configure a Trusted Publisher on npmjs.com for `ynab-mcp-server`, pointing at GitHub repository `calebl/ynab-mcp-server` and the exact workflow filename `.github/workflows/publish.yml` (the filename must match exactly); under Allowed actions select only `npm stage publish`.
 
-export const name = "ynab_my_tool";
-export const description = "Description of what this tool does";
-export const inputSchema = {
-  action: z.enum(["action1", "action2"]).describe("Action to perform"),
-  profile: z.string().optional().describe("Profile name"),
-  budget: z.string().optional().describe("Budget alias or ID"),
-};
+### Adding a tool
 
-export async function execute(input: { action: string; profile?: string; budget?: string }) {
-  const api = getApiClient(input.profile);
-  const budgetId = resolveBudgetId(input.budget, input.profile);
-  // ... implementation
-  return createResponse({ success: true });
-}
-```
+Each tool is a self-contained module in `src/tools/` exporting `name`,
+`description`, `inputSchema` (a Zod shape) and `execute(input, api)`. See
+`CLAUDE.md` for the full template, then add the module to the `tools` array in
+`src/registry.ts` and write a test in `src/tests/`. Registering it there serves
+it from both the stdio server and the Worker; mark `writes: true` if the tool
+changes data, which is what `YNAB_READ_ONLY` filters on.
 
-2. Register in `src/index.ts`:
+Useful references:
+- YNAB SDK types: `node_modules/ynab/dist/index.d.ts`
+- YNAB OpenAPI spec: <https://api.ynab.com/papi/open_api_spec.yaml>
 
-```typescript
-import * as MyTool from "./tools/my-tool.js";
+## Contributing
 
-server.registerTool(MyTool.name, {
-  title: "My Tool",
-  description: MyTool.description,
-  inputSchema: MyTool.inputSchema,
-}, async (input) => MyTool.execute(input as Parameters<typeof MyTool.execute>[0]));
-```
+Pull requests are welcome. For a new tool or a larger change, please open an
+issue first so we can agree on the scope.
 
-3. Add tests in `src/tests/`
+1. Fork the repository and create a branch from `main`.
+2. Make your change and add or update tests in `src/tests/`. New tools follow
+   the pattern in [Adding a tool](#adding-a-tool).
+3. Run `npm run test:run` and `npm run typecheck`.
+4. Use [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/)
+   for commit messages and the pull request title.
+5. Open a pull request against `main`.
 
-### Docker
+Every pull request runs the test suite on Node.js 22, 24 and 26 and receives an
+automated code review. Both checks must pass and review conversations must be
+resolved before the pull request can be merged.
 
-```bash
-docker build -t ynab-mcp .
-docker run -e YNAB_API_TOKEN=your-token ynab-mcp
-```
+## Compatibility
 
-## Rate Limits
-
-YNAB API allows 200 requests per hour per token. Each profile uses a separate token, so rate limits are independent across profiles. The server caches name-to-ID resolutions (accounts, categories, payees) with a 5-minute TTL to minimize API calls.
-
-## Credits
-
-Forked from [calebl/ynab-mcp-server](https://github.com/calebl/ynab-mcp-server). Upstream features (tool name prefixes, API gap implementations, scheduled transactions) are merged and incorporated into the consolidated tool architecture.
+`budgetId` and `YNAB_BUDGET_ID` are deprecated but still
+accepted; there is no removal date. Use `planId` and `YNAB_PLAN_ID` for new
+integrations.
 
 ## License
 
-MIT
+See [LICENSE](./LICENSE).
+
+## Star History
+
+[![Star History Chart](https://api.star-history.com/chart?repos=calebl/ynab-mcp-server&type=date&legend=top-left)](https://www.star-history.com/?repos=calebl%2Fynab-mcp-server&type=date&legend=top-left)

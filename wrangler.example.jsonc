@@ -1,0 +1,58 @@
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "ynab-mcp-server",
+	"main": "src/worker/index.ts",
+	"compatibility_date": "2026-09-01",
+	"compatibility_flags": [
+		"nodejs_compat"
+	],
+	"observability": {
+		"enabled": true
+	},
+	// Hourly. Auto-budget runs each time; the reminder acts only in its chosen
+	// local hour so it keeps its wall-clock slot across daylight saving changes.
+	"triggers": {
+		"crons": ["0 * * * *"]
+	},
+	"kv_namespaces": [
+		{
+			// OAuth storage; see DEPLOY.md. Create with:
+			//   npx wrangler kv namespace create OAUTH_KV
+			"binding": "OAUTH_KV",
+			"id": "REPLACE_WITH_KV_NAMESPACE_ID",
+			"remote": true
+		}
+	],
+	"d1_databases": [
+		{
+			// Optional auto-budget service state; see DEPLOY.md. Create with:
+			//   npx wrangler d1 create ynab-autobudget
+			// then apply the schema with:
+			//   npx wrangler d1 migrations apply ynab-autobudget --remote
+			// Remove this block if you do not use the service.
+			"binding": "AUTOBUDGET_DB",
+			"database_name": "ynab-autobudget",
+			"database_id": "REPLACE_WITH_D1_DATABASE_ID",
+			"migrations_dir": "migrations"
+		}
+	],
+	"vars": {
+		// Deployment-specific values and credentials are set with
+		// `wrangler secret put`, never committed here.
+		"YNAB_READ_ONLY": "false",
+		// Optional: exact OAuth redirect URIs (comma- or space-separated) that MCP
+		// clients may receive grants at; loopback redirects are always allowed.
+		// Unset allows any client, each still needing approval at sign-in.
+		// "ALLOWED_REDIRECT_URIS": "https://claude.ai/api/mcp/auth_callback,https://claude.com/api/mcp/auth_callback",
+		// Categorize reminders are disabled unless NAG_CALENDAR_ID and the
+		// GOOGLE_SERVICE_ACCOUNT_JSON secret are configured for a deployment.
+		"NAG_TIMEZONE": "America/Los_Angeles",
+		// The nag lands on a random hour in this window, different each day.
+		"NAG_HOUR_MIN": "8",
+		"NAG_HOUR_MAX": "20",
+		// Auto-budget service: "off" or "shadow". Needs the AUTOBUDGET_DB
+		// binding; alerts need the PUSHOVER_APP_TOKEN and PUSHOVER_USER_KEY
+		// secrets.
+		"AUTOBUDGET_MODE": "off"
+	}
+}

@@ -5,5 +5,12 @@ node_modules
 logs
 data
 coverage
-.claude
-.env
+.claude/*
+!.claude/skills/
+# dist/ is committed in this fork (the Mini runs it from the clone)
+
+.dev.vars
+wrangler.jsonc
+.wrangler/
+# Backups written by scripts/cloudflare-access.mjs
+.cloudflare-access/

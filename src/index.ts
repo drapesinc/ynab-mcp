@@ -1,112 +1,39 @@
 #!/usr/bin/env node
-/**
- * YNAB MCP Server
- *
- * Multi-profile, multi-budget YNAB integration for AI assistants.
- * Supports multiple YNAB accounts, budget aliases, and default accounts.
- */
-
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import * as ynab from "ynab";
 
-// Import consolidated tools
-import * as YnabBudgets from "./tools/ynab-budgets.js";
-import * as YnabAccounts from "./tools/ynab-accounts.js";
-import * as YnabAccountsWrite from "./tools/ynab-accounts-write.js";
-import * as YnabTransactionsRead from "./tools/ynab-transactions-read.js";
-import * as YnabTransactionsWrite from "./tools/ynab-transactions-write.js";
-import * as YnabCategoriesRead from "./tools/ynab-categories-read.js";
-import * as YnabCategoriesWrite from "./tools/ynab-categories-write.js";
-import * as YnabPayees from "./tools/ynab-payees.js";
-
-// Validate configuration on startup
-import { getConfig, listProfiles } from "./config.js";
+import { isReadOnly, registerAll, registerTools, tools } from "./registry.js";
+import * as SuggestCategoriesTool from "./tools/SuggestCategoriesTool.js";
+import { loadProfiles, withProfiles } from "./profiles.js";
 
 const server = new McpServer({
-  name: "ynab-mcp",
-  version: "2.0.0",
+  name: "ynab-mcp-server",
+  version: "0.9.0",
 });
 
-// Validate config at startup
-try {
-  const config = getConfig();
-  const profiles = listProfiles();
-  console.error(`YNAB MCP: Loaded ${profiles.length} profile(s): ${profiles.join(", ")}`);
-  console.error(`YNAB MCP: Default profile: ${config.defaultProfile}, Default budget: ${config.defaultBudget}`);
-} catch (error) {
-  console.error("YNAB MCP: Configuration error:", error instanceof Error ? error.message : error);
-  console.error("YNAB MCP: See README for environment variable setup");
-  process.exit(1);
+const readOnly = isReadOnly(process.env.YNAB_READ_ONLY);
+
+// Fork addition: YNAB_PROFILES gives each tool a `profile` argument (see src/profiles.ts).
+// Without it the server runs exactly as upstream, on YNAB_API_TOKEN.
+const profiles = loadProfiles();
+if (profiles) {
+  const selected = tools.filter((tool) =>
+    !tool.requiresAiCategorization || SuggestCategoriesTool.isCategorySuggestionEnabled()
+  );
+  registerTools(server, new ynab.API(""), withProfiles(selected, profiles), { readOnly });
+  console.error(`YNAB MCP: profiles ${profiles.list.map((p) => p.name).join(", ")} (default ${profiles.defaultProfile})`);
+} else {
+  const api = new ynab.API(process.env.YNAB_API_TOKEN || "");
+  registerAll(server, api, { readOnly });
 }
-
-// Register consolidated tools (8 total)
-
-// registerTool is generic over the zod shape. With SDK >= 1.31 the compiler
-// spends minutes (GBs of memory) instantiating it for these large shapes, so
-// register through a loosely typed alias. Runtime validation is unchanged:
-// the SDK still builds and applies the zod schema from inputSchema.
-const register = server.registerTool.bind(server) as unknown as (
-  name: string,
-  config: { title: string; description: string; inputSchema: unknown },
-  callback: (input: any) => Promise<any>,
-) => unknown;
-
-// Read-only tools (4)
-register(YnabBudgets.name, {
-  title: "YNAB Budgets",
-  description: YnabBudgets.description,
-  inputSchema: YnabBudgets.inputSchema,
-}, async (input) => YnabBudgets.execute(input as Parameters<typeof YnabBudgets.execute>[0]));
-
-register(YnabAccounts.name, {
-  title: "YNAB Accounts",
-  description: YnabAccounts.description,
-  inputSchema: YnabAccounts.inputSchema,
-}, async (input) => YnabAccounts.execute(input as Parameters<typeof YnabAccounts.execute>[0]));
-
-register(YnabTransactionsRead.name, {
-  title: "YNAB Transactions (Read)",
-  description: YnabTransactionsRead.description,
-  inputSchema: YnabTransactionsRead.inputSchema,
-}, async (input) => YnabTransactionsRead.execute(input as Parameters<typeof YnabTransactionsRead.execute>[0]));
-
-register(YnabCategoriesRead.name, {
-  title: "YNAB Categories (Read)",
-  description: YnabCategoriesRead.description,
-  inputSchema: YnabCategoriesRead.inputSchema,
-}, async (input) => YnabCategoriesRead.execute(input as Parameters<typeof YnabCategoriesRead.execute>[0]));
-
-// Write tools (4)
-register(YnabTransactionsWrite.name, {
-  title: "YNAB Transactions (Write)",
-  description: YnabTransactionsWrite.description,
-  inputSchema: YnabTransactionsWrite.inputSchema,
-}, async (input) => YnabTransactionsWrite.execute(input as Parameters<typeof YnabTransactionsWrite.execute>[0]));
-
-register(YnabCategoriesWrite.name, {
-  title: "YNAB Categories (Write)",
-  description: YnabCategoriesWrite.description,
-  inputSchema: YnabCategoriesWrite.inputSchema,
-}, async (input) => YnabCategoriesWrite.execute(input as Parameters<typeof YnabCategoriesWrite.execute>[0]));
-
-register(YnabAccountsWrite.name, {
-  title: "YNAB Accounts (Write)",
-  description: YnabAccountsWrite.description,
-  inputSchema: YnabAccountsWrite.inputSchema,
-}, async (input) => YnabAccountsWrite.execute(input as Parameters<typeof YnabAccountsWrite.execute>[0]));
-
-register(YnabPayees.name, {
-  title: "YNAB Payees",
-  description: YnabPayees.description,
-  inputSchema: YnabPayees.inputSchema,
-}, async (input) => YnabPayees.execute(input as Parameters<typeof YnabPayees.execute>[0]));
 
 // Start the server
 async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
 
-  console.error("YNAB MCP server running on stdio");
+  console.error(`YNAB MCP server running on stdio${readOnly ? " (read-only)" : ""}`);
 }
 
 main().catch(console.error);

@@ -1,0 +1,48 @@
+import OAuthProvider from "@cloudflare/workers-oauth-provider";
+
+import { AccessHandler, usesAccess } from "./access.js";
+import { GitHubHandler } from "./github-handler.js";
+import { getErrorMessage } from "../tools/errorUtils.js";
+import { runAutobudget } from "./autobudget/run.js";
+import { McpApiHandler } from "./mcp.js";
+import { runNag } from "./nag.js";
+import type { WorkerEnv } from "./env.js";
+
+const provider = new OAuthProvider({
+  apiRoute: "/mcp",
+  apiHandler: McpApiHandler as any,
+  defaultHandler: GitHubHandler as any,
+  authorizeEndpoint: "/authorize",
+  tokenEndpoint: "/token",
+  clientRegistrationEndpoint: "/register",
+});
+
+export default {
+  fetch(request: Request, env: WorkerEnv, ctx: ExecutionContext): Promise<Response> {
+    if (usesAccess(env)) return AccessHandler.fetch(request, env);
+    return provider.fetch(request, env as any, ctx);
+  },
+
+  /**
+   * Runs hourly. The nag itself only acts in the configured local hour, so the
+   * reminder holds its wall-clock time through daylight saving changes. The
+   * auto-budget service runs every hour it is switched on.
+   */
+  async scheduled(_event: ScheduledController, env: WorkerEnv, ctx: ExecutionContext): Promise<void> {
+    ctx.waitUntil((async () => {
+      const outcome = await runNag(env);
+      console.log("nag:", JSON.stringify(outcome));
+
+      if (outcome.ran && !usesAccess(env)) {
+        // Piggyback the OAuth housekeeping on a run that already did work.
+        const purged = await provider.purgeExpiredData(env as any);
+        console.log("oauth purge:", JSON.stringify(purged));
+      }
+    })());
+
+    ctx.waitUntil(runAutobudget(env)
+      // The outcome carries counts and the run's own error text, never amounts or payees.
+      .then((outcome) => console.log("autobudget:", JSON.stringify(outcome)))
+      .catch((error) => console.error("autobudget failed:", getErrorMessage(error))));
+  },
+};

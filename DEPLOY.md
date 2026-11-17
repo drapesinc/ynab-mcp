@@ -1,0 +1,610 @@
+# Deploying as a remote MCP server
+
+The stdio server in `src/index.ts` only works on the machine it runs on. To use
+these tools from claude.ai, the Claude mobile app, or another MCP client that
+supports remote servers, deploy the Worker in `src/worker/` to Cloudflare and
+add its `/mcp` URL to the client.
+
+The Worker holds the YNAB token server-side and puts either
+[GitHub sign-in](#github-sign-in) or [Cloudflare Access](#cloudflare-access)
+in front of it, restricted to a single account. These are separate layers: the
+sign-in controls who may connect, while the YNAB Personal Access Token controls
+which YNAB account the server reaches. They answer different questions, and
+neither substitutes for the other. The Worker uses one server-wide YNAB token,
+so anyone admitted through the sign-in reaches the
+deployer's YNAB account, money, and every plan available to that token—not
+their own YNAB account.
+`ynab_list_plans` lists all of those plans, and a caller-supplied `planId`
+overrides the optional `YNAB_PLAN_ID` default. That matters: the tool set
+includes create, update and delete, so an unauthenticated endpoint would let
+anyone who finds the URL rewrite those plans.
+
+## One-time setup
+
+### 1. Create your local Wrangler config and log in
+
+The repository provides a template; the real config is git-ignored because it
+contains your account-specific Cloudflare resource IDs.
+
+```bash
+cp wrangler.example.jsonc wrangler.jsonc
+npx wrangler login
+```
+
+The template includes an optional `AUTOBUDGET_DB` block with a placeholder D1
+ID. Remove that block before your first deploy unless you are setting up the
+auto-budget service below.
+
+### 2. Set up sign-in
+
+Pick one of the two below. Setting any `CF_ACCESS_*` value switches the Worker
+to Cloudflare Access. Otherwise it uses GitHub sign-in.
+
+#### GitHub sign-in
+
+Create the KV namespace for OAuth state and grants:
+
+```bash
+npx wrangler kv namespace create OAUTH_KV
+```
+
+Copy the printed `id` into your local `wrangler.jsonc`, replacing
+`REPLACE_WITH_KV_NAMESPACE_ID`. Do not edit `wrangler.example.jsonc` with your
+account-specific value.
+
+Then create a GitHub OAuth app at <https://github.com/settings/developers> →
+**New OAuth App**:
+
+- **Homepage URL**: `https://ynab-mcp-server.<your-subdomain>.workers.dev`
+- **Authorization callback URL**: `https://ynab-mcp-server.<your-subdomain>.workers.dev/callback`
+
+You get the exact hostname after the first `npm run deploy`; deploy once, then
+fill these in and update them if the name changes.
+
+Finally, set the GitHub secrets. Only the GitHub username stored in
+`ALLOWED_GITHUB_LOGIN` can complete sign-in.
+
+```bash
+npx wrangler secret put ALLOWED_GITHUB_LOGIN
+npx wrangler secret put GITHUB_CLIENT_ID
+npx wrangler secret put GITHUB_CLIENT_SECRET
+```
+
+#### Cloudflare Access
+
+If your Cloudflare account already uses [Cloudflare Access](https://developers.cloudflare.com/cloudflare-one/policies/access/),
+it can sign MCP clients in instead of the Worker's own GitHub OAuth. Access
+runs the OAuth flow with the client at Cloudflare's edge, so unauthenticated
+requests never reach the Worker, and the Worker verifies the signed
+`Cf-Access-Jwt-Assertion` token on every request it does get. You need no
+GitHub OAuth app and no `OAUTH_KV` namespace.
+
+Access can protect the Worker in one of two ways:
+
+- **No custom domain: Worker-level Access.** Access protects the Worker
+  itself, set to all traffic, which covers every address the Worker answers
+  on, including its `workers.dev` address and preview URLs. The connector URL
+  stays `https://ynab-mcp-server.<your-subdomain>.workers.dev/mcp`.
+- **Custom domain: a self-hosted Access application.** Access protects one
+  hostname in a zone on your account, so the Worker's `workers.dev` address
+  has to be turned off, or requests could reach it around Access.
+
+1. In `wrangler.jsonc`, remove the `kv_namespaces` block.
+   - For Worker-level Access, keep the `workers.dev` address. You can turn
+     off preview URLs if you don't use them:
+
+     ```jsonc
+     "preview_urls": false,
+     ```
+
+   - For a custom domain, serve the Worker there and turn off its other
+     addresses:
+
+     ```jsonc
+     "workers_dev": false,
+     "preview_urls": false,
+     "routes": [{ "pattern": "ynab.example.com", "custom_domain": true }],
+     ```
+
+   Then deploy once (step 4) so the Worker exists for Access to protect.
+2. Set up Access with the setup script below (or in the dashboard). Either
+   way you end up with an Access application that has an Allow policy for
+   your own email and Managed OAuth turned on, so MCP clients can sign in
+   through it, with the exact callback URI of each MCP client you use in its
+   allowed redirect URIs (see the
+   [example callback URIs](#restricting-redirects-optional)). Leave
+   `ALLOWED_REDIRECT_URIS` unset, or the Worker answers every request with a
+   500.
+3. Set `CF_ACCESS_TEAM_DOMAIN` to your team domain as a bare hostname
+   (`<team>.cloudflareaccess.com`, no `https://`), `CF_ACCESS_AUD` to the
+   application's Audience (AUD) tag, and `CF_ACCESS_ALLOWED_EMAIL` to your own
+   email, each with `npx wrangler secret put`. With all three set, the
+   Worker answers only `/mcp`, and only with a valid Access token for that
+   email (compared case-insensitively). A token for any other identity gets a
+   403, even one the Access policy allowed, and so does a service token, which
+   carries no email. With only some of them set, the Worker answers every
+   request with a 500 instead of falling back to GitHub sign-in. Deploy again
+   (step 4) to switch the Worker to Access sign-in.
+
+This mode has been tested with claude.ai in a browser and the Claude mobile
+app. Others have reported claude.ai failing to connect through Access Managed
+OAuth, so check your client before relying on it, for example by trying it on
+a separate test Worker first. Other MCP clients haven't been tested through
+Access.
+
+##### Setup script
+
+`scripts/cloudflare-access.mjs` sets up the Access application through the
+Cloudflare API, so you don't have to click through the dashboard. It needs
+Node and this repository checkout, nothing else. It takes every input from
+the environment and its flags, keeps credentials out of tracked files, and
+writes rollback backups only to the git-ignored `.cloudflare-access/` directory.
+Run `npm run cf-access -- help` (or `--help` / `-h`) for its full usage.
+
+Create an API token in the Cloudflare dashboard (My Profile → API Tokens →
+Create Token → Create Custom Token), limited to your account, with these
+permissions:
+
+| Permission | Access | Used for |
+| --- | --- | --- |
+| Account · Access: Apps and Policies | Edit | Reading and writing the Access application and its Allow policy |
+| Account · Access: Organizations, Identity Providers, and Groups | Read | Your team domain and login methods |
+| Account · Workers Scripts | Read | Finding the Worker for `--worker` |
+
+Give it a short expiry and delete it when you're done. Pass it in
+`CLOUDFLARE_API_TOKEN`. If the token can see more than one account, also set
+`CLOUDFLARE_ACCOUNT_ID`.
+
+```bash
+export CLOUDFLARE_API_TOKEN=...   # or load it from a file you keep private
+
+# Read-only: team domain, login methods, and any Access application already
+# protecting the Worker, with its policies and Managed OAuth settings.
+npm run cf-access -- inspect --worker ynab-mcp-server
+
+# Prints the exact requests it would send, and changes nothing.
+npm run cf-access -- apply --worker ynab-mcp-server \
+  --email you@example.com \
+  --redirect-uri https://claude.ai/api/mcp/auth_callback \
+  --redirect-uri https://claude.com/api/mcp/auth_callback
+
+# The same command with --yes makes the changes.
+npm run cf-access -- apply --worker ynab-mcp-server \
+  --email you@example.com \
+  --redirect-uri https://claude.ai/api/mcp/auth_callback \
+  --redirect-uri https://claude.com/api/mcp/auth_callback \
+  --yes
+```
+
+For a custom domain, pass `--hostname ynab.example.com` instead of `--worker`.
+
+`apply` creates an Allow policy for `--email`, or reuses one that admits only
+that email and has no additional approval, justification, isolation, MFA,
+connection, or session controls. It then creates or updates the Access
+application:
+
+- With `--worker`, the Worker-level application, set to all traffic. If the
+  Worker has Access for preview URLs only, `apply` switches it to all traffic.
+- With `--hostname`, the self-hosted application for that hostname.
+- Its policies are replaced by the Allow policy for your email.
+- Managed OAuth is turned on, with your `--redirect-uri` values (repeat the
+  flag for each client; there is no default) as the only allowed redirect
+  URIs. The script accepts exact `https` callbacks, exact `http` callbacks on
+  localhost or another loopback address, and exact custom-scheme callbacks for
+  native clients, including single-slash forms such as
+  `com.example.app:/oauth/callback`. Cloudflare's wildcard form is also
+  accepted for HTTP(S) paths, but only as one final `/*` suffix; custom-scheme
+  wildcards, query wildcards, other placements, and non-loopback `http` are
+  refused.
+
+It prints `CF_ACCESS_TEAM_DOMAIN` and `CF_ACCESS_AUD` for step 3. Other
+options:
+
+| Flag | Default | Meaning |
+| --- | --- | --- |
+| `--allow-localhost`, `--allow-loopback` | off | Admit any client redirecting to localhost, or to a loopback address, such as Claude Code. Either one admits any local client. |
+| `--token-lifetime` | `15m` | Lifetime of the access tokens Access issues to clients |
+| `--grant-session` | `336h` | How long a client stays signed in before it has to sign in through Access again |
+
+Without `--yes`, `apply` and `rollback` only print the requests they would
+send. The dry run prints each exact request body. If `apply` must first create
+a policy, Cloudflare assigns its ID, so the following app body contains one
+clearly labelled placeholder for that server-assigned ID; with `--yes`, that
+returned ID is the only value substituted. With `--yes`, before changing
+anything the script writes a rollback record to `.cloudflare-access/`
+(git-ignored). For an update, that record contains the Access application's
+full JSON; for a newly created application, it records the returned application
+ID so rollback can delete it. `apply` prints the rollback command. An update
+keeps every application setting it doesn't change. Because policies
+and Managed OAuth settings apply to the whole Access application, the script
+refuses to update an application that also protects another destination; split
+those destinations into separate applications or use the dashboard. For a
+hostname, every active domain must be that exact bare hostname, with no path.
+A Worker's `worker` and `preview_worker` destinations count as the same target.
+The script also refuses target destinations with overrides, because a public
+or bypass override could leave part of the target unprotected. It refuses when
+more than one Access application matches before it writes anything, and it
+stops on any API error.
+
+To undo an `apply`, pass the backup file it printed. Run without `--yes`
+first to see the request:
+
+```bash
+npm run cf-access -- rollback --from .cloudflare-access/<backup>.json --yes
+```
+
+This restores the application's destinations, policies and Managed OAuth
+settings from the backup, or deletes the application if `apply` created it.
+The Allow policy `apply` created is left in place. Clients connected through
+Access stop working until you set up sign-in again.
+
+##### In the dashboard
+
+- **Worker-level Access:** in Workers & Pages, open the Worker and turn on
+  Cloudflare Access for all traffic. Then, in the Zero Trust dashboard, open
+  the Access application this created.
+- **Custom domain:** in the Zero Trust dashboard, add a self-hosted Access
+  application for the hostname.
+
+Give the application an Allow policy for your own identity and turn on
+Managed OAuth. In its Managed OAuth settings, add the exact callback URI of
+each MCP client you use to **Allowed redirect URIs**. For a local client such
+as Claude Code, also turn on **Allow localhost clients** or **Allow loopback
+clients**; either one admits any client redirecting to that address. Copy the
+application's Audience (AUD) tag for `CF_ACCESS_AUD`.
+
+### 3. Set deployment values and secrets
+
+Run each command and paste the value when prompted. Keep deployment-specific
+values out of `wrangler.jsonc`; Wrangler stores them remotely on the Worker.
+
+```bash
+npx wrangler secret put YNAB_API_TOKEN
+```
+
+Optionally pin a default plan so tool calls can omit `planId`:
+
+```bash
+npx wrangler secret put YNAB_PLAN_ID
+```
+
+`YNAB_BUDGET_ID` is deprecated but still accepted as an alias; there is no
+removal date. Use `YNAB_PLAN_ID` for new deployments.
+
+Category suggestions are optional. To enable them, set the operator-owned
+TypeSafe credential as a Worker secret:
+
+```bash
+npx wrangler secret put TYPESAFE_API_KEY
+```
+
+Then add `"YNAB_AI_CATEGORIZATION": "true"` under `vars` in `wrangler.jsonc`.
+Both settings are required to expose `ynab_suggest_categories`; the key never
+belongs in `wrangler.jsonc` or a tool argument.
+
+Optionally, add `"YNAB_AI_TYPICAL_PAYEES": "true"` under `vars` to send each
+category's most frequent payee names to the model. It improves accuracy on your
+own filing habits but discloses aggregated payee history to TypeSafe, so it is
+off unless set.
+
+### 4. Deploy
+
+```bash
+npm run deploy
+```
+
+## Add the connector in Claude
+
+1. claude.ai → Settings → Connectors → **Add custom connector**
+2. Name: `YNAB`
+3. URL: `https://ynab-mcp-server.<your-subdomain>.workers.dev/mcp`, or your
+   custom domain's `/mcp` if you serve the Worker there
+4. Connect. With GitHub sign-in, check the address on the approval page and
+   choose **Approve**, then complete the GitHub sign-in. With Cloudflare
+   Access, sign in through Access.
+
+Once connected it works everywhere you are signed in to Claude, including the
+mobile app. Your Mac does not need to be running.
+
+Any MCP client that supports remote servers with OAuth can connect the same
+way: give it the `/mcp` URL and complete the sign-in it opens.
+
+## Approving MCP clients
+
+_This section applies to GitHub sign-in. With Cloudflare Access, the Access
+application's allowed redirect URIs decide which clients can connect._
+
+MCP clients register themselves with the Worker automatically, so the Worker
+cannot know in advance which ones are yours. Every permitted sign-in therefore
+stops at an approval page before GitHub. It shows the name the client gave
+itself and the full address the grant will be sent to, with **Approve** and
+**Deny**.
+Clients choose their own names, so check the address: only approve a sign-in
+you just started, going to your client's callback. Denying sends the client an
+`access_denied` error and issues nothing.
+
+The pending sign-in is stored in `OAUTH_KV` and tied to your browser with a
+short-lived cookie, so a link someone else prepared cannot complete it.
+
+### Restricting redirects (optional)
+
+Set `ALLOWED_REDIRECT_URIS` to the exact callback URIs of the clients you use,
+separated by commas or whitespace. Requests for any other redirect are refused
+before the approval page, and checked again just before a grant is issued.
+`http://` loopback redirects (`localhost`, `127.0.0.1`, `[::1]`, any port)
+stay allowed, because local clients pick their port at runtime. The approval
+page still appears for allowed clients. Leave the setting unset or blank to
+allow any client, subject to approval.
+
+Set it as a plain var in your `wrangler.jsonc` `vars`, or as a secret; either
+works:
+
+```bash
+npx wrangler secret put ALLOWED_REDIRECT_URIS
+```
+
+Example callback URIs (check your client's documentation; the approval page
+also shows the exact URI a client asked for):
+
+| Client | Redirect URI |
+| --- | --- |
+| Claude (claude.ai, desktop, and mobile apps) | `https://claude.ai/api/mcp/auth_callback`, `https://claude.com/api/mcp/auth_callback` |
+| ChatGPT connectors | `https://chatgpt.com/connector_platform_oauth_redirect` |
+| Claude Code, MCP Inspector, and other local clients | `http://localhost:<port>/...` (loopback, always allowed) |
+
+For example, to allow only Claude plus local clients:
+
+```bash
+echo "https://claude.ai/api/mcp/auth_callback,https://claude.com/api/mcp/auth_callback" | npx wrangler secret put ALLOWED_REDIRECT_URIS
+```
+
+## Categorize reminders (optional)
+
+The Worker can drop a reminder on a Google Calendar when transactions are
+waiting to be categorized. It runs hourly and acts once a day, in the local
+hour you choose. With no service account configured the job is a no-op, so this
+is entirely opt-in.
+
+### 1. Create a service account
+
+In the [Google Cloud console](https://console.cloud.google.com/projectcreate):
+
+1. Create a project, then enable the
+   [Calendar API](https://console.cloud.google.com/apis/library/calendar-json.googleapis.com)
+2. APIs & Services → Credentials → Create credentials → Service account
+3. On the new account, Keys → Add key → Create new key → JSON
+
+A service account avoids the usual OAuth dance: there are no refresh tokens to
+store and no consent screen, because access comes from sharing the calendar
+with it directly.
+
+### 2. Share the calendar with it
+
+In Google Calendar, open the calendar's settings → "Share with specific people
+or groups" → add the service account's email with **Make changes to events**.
+
+### 3. Configure and deploy
+
+Set the deployment-specific calendar ID and service-account key as Worker
+secrets. Configure `NAG_TIMEZONE`, the `NAG_HOUR_MIN`/`NAG_HOUR_MAX` window,
+and `NAG_SINCE_DAYS` in `wrangler.jsonc` if their defaults do not suit you:
+
+```bash
+npx wrangler secret put NAG_CALENDAR_ID
+npx wrangler secret put GOOGLE_SERVICE_ACCOUNT_JSON < service-account.json
+npm run deploy
+```
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `NAG_CALENDAR_ID` | — | Calendar to write to. Unset disables the job. |
+| `NAG_TIMEZONE` | `America/Los_Angeles` | IANA zone the reminder is scheduled in |
+| `NAG_HOUR_MIN` | `8` | Earliest local hour the event may land on |
+| `NAG_HOUR_MAX` | `20` | Latest local hour, inclusive. Set equal to the minimum for a fixed time. |
+
+### How it behaves
+
+- **Nothing pending, no event.** The reminder only exists when there is work.
+- **A different hour each day.** The slot is drawn from the configured window,
+  derived from the date so that every hourly run agrees on it — a per-run
+  random draw would fire several times some days and never on others.
+- **One event per day.** The event id is derived from the date, so a re-run
+  updates that day's event rather than stacking duplicates.
+- **The count is the current month.** It resets on the 1st, so the month you
+  are budgeting is the month you are reminded about. Anything older is a
+  footnote in the description, not the headline.
+- **Transfers are ignored.** Moving money between your own accounts shows up
+  as uncategorized in YNAB but never needs a category. In the plan this was
+  built against, 77 of 80 "uncategorized" items were transfer legs.
+- **The wording rotates daily.** Same mechanism as the hour: derived from the
+  date, so it is stable within a day and different the next.
+- **Daylight saving is handled.** Cloudflare crons are UTC, so the job runs
+  hourly and acts only in the configured local hour, holding its wall-clock
+  slot year round.
+
+## TypeSafe category preview (optional)
+
+When enabled as described above, `ynab_suggest_categories` proposes categories
+for eligible uncategorized outflows. It answers from exact-payee history and a
+personal prior trained on the plan's own history first, and calls the model
+only for what is left. It is a preview only and never writes to YNAB. Applying a proposal requires a separate explicit write; see
+[Category suggestions](./README.md#category-suggestions-optional) for the apply
+tool and its safeguards.
+
+See [Category suggestions](./README.md#category-suggestions-optional) for the
+authoritative data-sharing contract, model and cost limits, and evaluation
+caveats.
+
+## Auto-budget service (optional)
+
+The Worker can run an auto-budget service on its hourly cron trigger. Each run
+delta-syncs transactions and accounts from YNAB, works out what it would do,
+and alerts you about spending:
+
+- **Categorize** an unapproved outflow when at least three categorized
+  transactions for its payee in the last 12 months all used the same category.
+- **Approve** a categorized transaction from a payee you have approved at least
+  three times before. Transfers, splits, matched pairs, possible duplicates
+  and anything over the per-transaction cap are left for you.
+- **Assign** Ready to Assign to this month's underfunded targets, largest
+  shortfall first, then spend what is left on next month's targets.
+- **Alert immediately** through Pushover when any category goes negative,
+  including a hidden category, Ready to Assign goes negative, a bank import
+  link breaks, or the configured plan becomes unreachable. Immediate alerts
+  are deduplicated by month or until the condition clears, as appropriate.
+- **Report approaching limits in the daily digest.** Once a day Pushover sends
+  visible categories on pace to overspend, visible-category bills due within
+  three days that their combined due-date-ordered balance cannot cover, your
+  unapproved and uncategorized backlog, and a summary of what the service would
+  do. Split purchases and scheduled transactions count in each subtransaction's
+  category.
+
+**This version never writes to YNAB.** It runs in shadow mode: new or changed
+decisions are recorded in an audit log in D1, and the digest reports the current
+plan, but nothing in your YNAB plan changes. Its YNAB client can only send GET
+requests. Later versions will add write stages that you switch on one at a time.
+
+The caps the write stages will enforce already shape the shadow decisions, so
+the log shows what a later write stage would do: at most $250 per transaction,
+at most min(Ready to Assign, total underfunded, $5,000) assigned per day, and at most
+25 transactions and 10 categories per run. Transactions it changes will carry a
+purple flag.
+
+### 1. Create the D1 database
+
+```bash
+npx wrangler d1 create ynab-autobudget
+```
+
+Add the binding it prints to `wrangler.jsonc`, keeping the binding name
+`AUTOBUDGET_DB`, then create the tables:
+
+```jsonc
+"d1_databases": [
+  {
+    "binding": "AUTOBUDGET_DB",
+    "database_name": "ynab-autobudget",
+    "database_id": "<id from wrangler d1 create>",
+    "migrations_dir": "migrations"
+  }
+]
+```
+
+```bash
+npx wrangler d1 migrations apply ynab-autobudget --remote
+```
+
+Run the `migrations apply` command again after any upgrade that adds a file
+under `migrations/`.
+
+### 2. Set up Pushover
+
+Create an application at [pushover.net](https://pushover.net/apps/build), then
+store its API token and your user key as secrets:
+
+```bash
+npx wrangler secret put PUSHOVER_APP_TOKEN
+npx wrangler secret put PUSHOVER_USER_KEY
+```
+
+Without both secrets the service still runs and records decisions, but sends
+nothing. Alerts it could not deliver are retried on the next run.
+
+### 3. Switch it on and deploy
+
+Set `AUTOBUDGET_MODE` to `"shadow"` in `wrangler.jsonc` and deploy:
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `AUTOBUDGET_MODE` | `off` | `off` or `shadow`. Other values are rejected as unrecognized. |
+| `AUTOBUDGET_TIMEZONE` | `NAG_TIMEZONE`, then `America/Los_Angeles` | IANA zone for the daily digest |
+| `AUTOBUDGET_DIGEST_HOUR` | `8` | Local hour (0-23) the digest is sent |
+| `PUSHOVER_APP_TOKEN`, `PUSHOVER_USER_KEY` | — | Secrets. Pushover credentials; unset sends nothing. |
+
+The service uses `YNAB_PLAN_ID` (or the deprecated `YNAB_BUDGET_ID`). If the
+token cannot see that plan, each run records an error that names the plans it
+can see, and Pushover alerts you once.
+
+### How it behaves
+
+- **YNAB_READ_ONLY is a hard stop.** This phase supports only shadow mode, and
+  `YNAB_READ_ONLY=true` prevents later write stages from changing that.
+- **Pause from any MCP client.** `ynab_autobudget_pause` stops every scheduled
+  run until you resume it with `paused: false`. It changes only the service's
+  own state, so it stays available in read-only mode.
+- **Small, predictable API use.** A run makes about five YNAB requests and
+  never more than 20. YNAB allows 200 an hour per token, shared with every
+  other client of that token, so a separate token for the Worker keeps the
+  budgets apart.
+- **The first run reads 12 months of transactions plus the 48-day duplicate
+  evidence window,** and every unapproved or uncategorized transaction however
+  old. Payee rules still use only the latest 12 months. Before evaluating that
+  initial snapshot, the service applies a delta from the oldest server knowledge
+  returned by those requests. Later transaction and account syncs read only
+  changes. On the Workers Free plan, a large first read can exceed the 10 ms CPU
+  limit for cron triggers; the Workers Paid plan raises it. Steady-state runs are
+  small.
+- **A large sync spreads over several runs.** Each run applies at most 10,000
+  transactions, so it stays inside D1's per-run query limit. After any continued
+  response finishes, the service applies one complete delta from its saved
+  cursor before treating the mirror as current. Until then, scheduled runs do
+  not evaluate decisions, send alerts, or send or consume the daily digest, and
+  the status and plan tools report sync progress and rows remaining instead of
+  recommendations. If saving fails, the old cursor is kept and the next run
+  retries.
+- **One run at a time.** A lease in D1 stops an overlapping run or dry run
+  from interleaving with a scheduled one.
+- **The audit log shows changes, not repeats.** A decision is recorded again
+  only when it differs from the last one for that transaction or category.
+  Phase 1 records the first shadow decision per subject; if that subject returns
+  to the identical state without an intervening recorded decision, it is not
+  logged again. Runs, decisions and periodic alerts are kept for 13 months.
+  Unresolved open alerts are kept until their condition clears. The transaction
+  mirror keeps the 12-month history window, a further 45-day evidence margin
+  plus the three-day duplicate lookback for settled rows, and every pending
+  transaction, including approved uncategorized non-transfer, non-split rows,
+  however old. Possible duplicates older than that fixed window are not detected.
+
+### MCP tools
+
+When `AUTOBUDGET_DB` is bound, the Worker also serves these tools to any MCP
+client. They are not part of the npm package, which has no D1 database.
+
+| Tool | What it does |
+| --- | --- |
+| `ynab_autobudget_status` | Mode and why, pause state, sync progress, last run, decisions recorded in the last 24 hours, and the caps |
+| `ynab_autobudget_plan` | Dry run: syncs its D1 mirror and shows what the scheduled service would do under its own caps, category exclusions and next-month spillover rules, including immediate, pace and uncovered-bill alerts. Its assignments can therefore differ from `ynab_auto_assign`; use that tool with `dryRun` to preview an on-demand Ready to Assign allocation. While a continued sync is incomplete, this tool reports progress instead. It never writes to YNAB, records decisions or sends notifications. |
+| `ynab_autobudget_pause` | Pauses the service, or resumes it with `paused: false` |
+
+## Read-only mode
+
+To expose no tools that write to YNAB, set `YNAB_READ_ONLY` to `"true"` in
+`wrangler.jsonc` and redeploy. The YNAB write tools disappear from `tools/list`
+entirely rather than failing when called. The
+TypeSafe preview is registered as read-only and remains available in this mode
+only when both its feature flag and secret are configured. The auto-budget
+service stays in shadow mode, and its tools stay available.
+
+## Local development
+
+```bash
+npm run dev:worker
+```
+
+Uses `.dev.vars` for secrets (git-ignored). The OAuth flow needs a real GitHub
+app to complete end to end; without one you can still exercise the unauthorized
+paths and the OAuth metadata endpoints.
+
+## Layout
+
+| Path | Purpose |
+| --- | --- |
+| `src/registry.ts` | The one tool list, shared by both entry points |
+| `src/index.ts` | stdio entry (local Claude Code / Claude Desktop) |
+| `src/worker/index.ts` | Worker entry: GitHub OAuth or Cloudflare Access in front of the MCP handler |
+| `src/worker/mcp.ts` | Builds the MCP server and serves `/mcp` |
+| `src/worker/autobudget/` | The auto-budget service and its MCP tools |
+| `migrations/` | D1 schema for the auto-budget service |
+| `src/worker/github-handler.ts` | GitHub sign-in and the single-user gate |
+| `src/worker/access.ts` | Cloudflare Access mode: verifies the Access token in place of the GitHub sign-in |
+| `scripts/cloudflare-access.mjs` | Sets up the Cloudflare Access application (`npm run cf-access`) |

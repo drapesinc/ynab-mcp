@@ -1,0 +1,198 @@
+import { afterEach, describe, it, expect, vi } from "vitest";
+
+import { createServer, McpApiHandler } from "../worker/mcp.js";
+import { tools } from "../registry.js";
+import type { WorkerEnv } from "../worker/env.js";
+import { createTestD1 } from "./stubs/d1.js";
+
+const env: WorkerEnv = {
+  YNAB_API_TOKEN: "test-token",
+  GITHUB_CLIENT_ID: "id",
+  GITHUB_CLIENT_SECRET: "secret",
+  ALLOWED_GITHUB_LOGIN: "someone",
+};
+
+/** Sends one JSON-RPC message to the Worker's /mcp handler. */
+async function call(body: unknown, overrides: Partial<WorkerEnv> = {}) {
+  const request = new Request("https://example.com/mcp", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      accept: "application/json, text/event-stream",
+    },
+    body: JSON.stringify(body),
+  });
+  return McpApiHandler.fetch(request, { ...env, ...overrides });
+}
+
+/** The handler may answer as JSON or as a single SSE frame; accept both. */
+async function readResult(response: Response) {
+  const text = await response.text();
+  const dataLine = text.split("\n").find((l) => l.startsWith("data:"));
+  return JSON.parse(dataLine ? dataLine.slice(5).trim() : text);
+}
+
+const initialize = {
+  jsonrpc: "2.0",
+  id: 1,
+  method: "initialize",
+  params: {
+    protocolVersion: "2024-11-05",
+    capabilities: {},
+    clientInfo: { name: "test", version: "1" },
+  },
+};
+
+describe("worker MCP handler", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+  });
+
+  it("mirrors plan environment aliases without resolving them", async () => {
+    vi.stubEnv("YNAB_PLAN_ID", "original-plan");
+    vi.stubEnv("YNAB_BUDGET_ID", "original-budget");
+
+    const legacyOnlyServer = createServer({ ...env, YNAB_BUDGET_ID: "legacy-plan" });
+    expect(process.env.YNAB_PLAN_ID).toBeUndefined();
+    expect(process.env.YNAB_BUDGET_ID).toBe("legacy-plan");
+    await legacyOnlyServer.close();
+
+    const bothServer = createServer({
+      ...env,
+      YNAB_PLAN_ID: "canonical-plan",
+      YNAB_BUDGET_ID: "legacy-plan",
+    });
+    expect(process.env.YNAB_PLAN_ID).toBe("canonical-plan");
+    expect(process.env.YNAB_BUDGET_ID).toBe("legacy-plan");
+    await bothServer.close();
+  });
+
+  it("mirrors the typical-payees opt-in and clears it when the binding is absent", async () => {
+    vi.stubEnv("YNAB_AI_TYPICAL_PAYEES", "stale");
+
+    const optedIn = createServer({ ...env, YNAB_AI_TYPICAL_PAYEES: "true" });
+    expect(process.env.YNAB_AI_TYPICAL_PAYEES).toBe("true");
+    await optedIn.close();
+
+    const optedOut = createServer(env);
+    expect(process.env.YNAB_AI_TYPICAL_PAYEES).toBeUndefined();
+    await optedOut.close();
+  });
+
+  it("responds to initialize over HTTP", async () => {
+    const response = await call(initialize);
+    expect(response.status).toBe(200);
+
+    const result = await readResult(response);
+    expect(result.result.serverInfo).toEqual({
+      name: "ynab-mcp-server",
+      version: "0.9.0",
+    });
+  });
+
+  it("serves every tool", async () => {
+    const response = await call({ jsonrpc: "2.0", id: 2, method: "tools/list" });
+    const result = await readResult(response);
+
+    const names = result.result.tools.map((t: { name: string }) => t.name);
+    expect(names).toHaveLength(tools.filter((tool) => !tool.requiresAiCategorization).length);
+    expect(names).toContain("ynab_plan_summary");
+    expect(names).not.toContain("ynab_budget_summary");
+    expect(names).toContain("ynab_create_transaction");
+    expect(names).not.toContain("ynab_suggest_categories");
+  });
+
+  it("answers concurrent requests that reuse a JSON-RPC id with their own results", async () => {
+    const listTools = { jsonrpc: "2.0", id: 0, method: "tools/list" };
+    const [full, readOnly] = await Promise.all([
+      call(listTools).then(readResult),
+      call(listTools, { YNAB_READ_ONLY: "true" }).then(readResult),
+    ]);
+
+    const names = (result: any) => result.result.tools.map((t: { name: string }) => t.name);
+    expect(names(full)).toContain("ynab_create_transaction");
+    expect(names(readOnly)).not.toContain("ynab_create_transaction");
+  });
+
+  it("rejects a request body over the configured 1 MiB limit", async () => {
+    const response = await call({
+      jsonrpc: "2.0",
+      id: 3,
+      method: "tools/list",
+      params: { padding: "x".repeat(1024 * 1024) },
+    });
+    expect(response.status).toBe(413);
+  });
+
+  it("rejects oversized tool arguments before calling YNAB", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    const response = await call({
+      jsonrpc: "2.0",
+      id: 4,
+      method: "tools/call",
+      params: {
+        name: "ynab_create_transaction",
+        arguments: {
+          planId: "plan",
+          accountId: "account",
+          date: "2026-01-01",
+          amount: 0,
+          payeeName: "Payee",
+          subtransactions: Array.from({ length: 20_000 }, () => ({ amount: 0 })),
+        },
+      },
+    });
+    const result = await readResult(response);
+
+    expect(response.status).toBe(200);
+    expect(result.result).toMatchObject({
+      isError: true,
+      content: [{ type: "text", text: expect.stringContaining("maximum of 10000 elements") }],
+    });
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("exposes category suggestions only with both opt-in settings", async () => {
+    const onlyFlag = await call(
+      { jsonrpc: "2.0", id: 3, method: "tools/list" },
+      { YNAB_AI_CATEGORIZATION: "true" },
+    );
+    const onlyFlagResult = await readResult(onlyFlag);
+    expect(onlyFlagResult.result.tools.map((t: { name: string }) => t.name)).not.toContain("ynab_suggest_categories");
+
+    const enabled = await call(
+      { jsonrpc: "2.0", id: 4, method: "tools/list" },
+      { YNAB_AI_CATEGORIZATION: "true", TYPESAFE_API_KEY: "typesafe-secret", YNAB_READ_ONLY: "true" },
+    );
+    const enabledResult = await readResult(enabled);
+    const names = enabledResult.result.tools.map((t: { name: string }) => t.name);
+    expect(names).toContain("ynab_suggest_categories");
+    expect(names).not.toContain("ynab_create_transaction");
+  });
+
+  it("hides write tools when YNAB_READ_ONLY is true", async () => {
+    const response = await call(
+      { jsonrpc: "2.0", id: 5, method: "tools/list" },
+      { YNAB_READ_ONLY: "true" },
+    );
+    const result = await readResult(response);
+
+    const names = result.result.tools.map((t: { name: string }) => t.name);
+    expect(names).toContain("ynab_plan_summary");
+    expect(names).not.toContain("ynab_budget_summary");
+    expect(names).not.toContain("ynab_create_transaction");
+    expect(names).not.toContain("ynab_delete_transaction");
+  });
+
+  it("serves the auto-budget tools only with their database bound, read-only mode included", async () => {
+    const autobudget = ["ynab_autobudget_status", "ynab_autobudget_plan", "ynab_autobudget_pause"];
+    const names = async (overrides: Partial<WorkerEnv>) =>
+      (await readResult(await call({ jsonrpc: "2.0", id: 6, method: "tools/list" }, overrides)))
+        .result.tools.map((t: { name: string }) => t.name);
+
+    expect(await names({})).not.toContain("ynab_autobudget_status");
+    const bound = await names({ AUTOBUDGET_DB: createTestD1(), YNAB_READ_ONLY: "true" });
+    expect(bound).toEqual(expect.arrayContaining(autobudget));
+  });
+});

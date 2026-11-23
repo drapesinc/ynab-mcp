@@ -179,6 +179,9 @@ export async function execute(input, api) {
             transfer_transaction_id: txn.transfer_transaction_id,
             matched_transaction_id: txn.matched_transaction_id,
             import_id: txn.import_id,
+            // The payee as imported: YNAB's cleaned-up name and the bank's raw text.
+            import_payee_name: txn.import_payee_name,
+            import_payee_name_original: txn.import_payee_name_original,
             // A split leg listed as its own row; the id ties it back to the whole transaction.
             ...(txn.type === "subtransaction" ? { parent_transaction_id: txn.parent_transaction_id } : {}),
             // Present only on splits, whose parent row is categorised "Split".

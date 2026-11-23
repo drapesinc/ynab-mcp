@@ -12,6 +12,7 @@ import * as DeleteTransactionTool from "./tools/DeleteTransactionTool.js";
 import * as ListCategoriesTool from "./tools/ListCategoriesTool.js";
 import * as ListAccountsTool from "./tools/ListAccountsTool.js";
 import * as ListScheduledTransactionsTool from "./tools/ListScheduledTransactionsTool.js";
+import * as ManageScheduledTransactionTool from "./tools/ManageScheduledTransactionTool.js";
 import * as ImportTransactionsTool from "./tools/ImportTransactionsTool.js";
 import * as ListMonthsTool from "./tools/ListMonthsTool.js";
 import * as MoveMoneyTool from "./tools/MoveMoneyTool.js";
@@ -47,6 +48,7 @@ export const tools = [
     { title: "List Categories", module: ListCategoriesTool, writes: false },
     { title: "List Accounts", module: ListAccountsTool, writes: false },
     { title: "List Scheduled Transactions", module: ListScheduledTransactionsTool, writes: false },
+    { title: "Manage Scheduled Transaction", module: ManageScheduledTransactionTool, writes: true, destructive: true },
     { title: "Import Transactions", module: ImportTransactionsTool, writes: true },
     { title: "List Months", module: ListMonthsTool, writes: false },
     { title: "Move Money", module: MoveMoneyTool, writes: true },
@@ -59,9 +61,13 @@ export const tools = [
     { title: "Suggest Categories", module: SuggestCategoriesTool, writes: false, requiresAiCategorization: true },
     { title: "Apply Category Suggestions", module: ApplyCategorySuggestionsTool, writes: true, idempotent: true },
 ];
-/** True when a `YNAB_READ_ONLY` value asks for read-only mode: "true" in any case, surrounding whitespace ignored. */
+/**
+ * True unless a `YNAB_READ_ONLY` value explicitly opts in to write tools.
+ * Only "false" (any case, surrounding whitespace ignored) enables writes;
+ * unset, empty or any other value means read-only.
+ */
 export function isReadOnly(value) {
-    return value?.trim().toLowerCase() === "true";
+    return value?.trim().toLowerCase() !== "false";
 }
 function acceptsUndefined(schema) {
     return typeof schema === "object" && schema !== null &&

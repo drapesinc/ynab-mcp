@@ -1,8 +1,5 @@
 # ynab-mcp-server
 
-> **Fork note (drapesinc/ynab-mcp):** set `YNAB_PROFILES=personal,ammish` with one `YNAB_TOKEN_<NAME>` per login, and optional `YNAB_BUDGETS_<NAME>=cad:<plan id>,usd:<plan id>`, `YNAB_DEFAULT_PROFILE`, `YNAB_DEFAULT_BUDGET`. Every tool then takes an optional `profile` argument, and `planId` may be an alias. Without `YNAB_PROFILES` the server behaves exactly as upstream. See `src/profiles.ts`.
-
-
 A Model Context Protocol (MCP) server for interacting with your YNAB plans at https://ynab.com
 
 In order to have an AI interact with this tool, you will need to get your Personal Access Token
@@ -60,7 +57,7 @@ Environment variables:
 | `TYPESAFE_API_KEY` | no | Operator-owned TypeSafe credential. Required, but not sufficient, to enable category suggestions. |
 | `YNAB_AI_CATEGORIZATION` | no | Set to `"true"` together with `TYPESAFE_API_KEY` to expose the opt-in suggestion tool. |
 | `YNAB_AI_TYPICAL_PAYEES` | no | Set to `"true"` to send each category's most frequent payee names from the last 12 months with each model request. Off by default because it discloses aggregated payee history to TypeSafe. |
-| `YNAB_READ_ONLY` | no | Set to `"true"` (case-insensitive; surrounding whitespace is ignored) to remove tools that write to YNAB, in the stdio server, the HTTP server and the Worker. |
+| `YNAB_READ_ONLY` | no | Read-only by default: tools that write to YNAB are registered only when this is `"false"` (case-insensitive; surrounding whitespace is ignored). Unset, empty or any other value leaves them out, in the stdio server, the HTTP server and the Worker. |
 | `YNAB_MCP_HOST`, `PORT` | no | HTTP server only. Address and port to listen on; default `127.0.0.1` and `3000`. |
 | `YNAB_MCP_ALLOWED_ORIGINS` | no | HTTP server only. Comma-separated browser origins allowed to call `/mcp` (e.g. `https://app.example.com`). Each entry is reduced to scheme, host and port, so a trailing slash is ignored. Empty by default, which refuses every request that carries an `Origin` header. |
 | `YNAB_MCP_ALLOWED_HOSTS` | no | HTTP server only. Comma-separated extra `Host` hostnames accepted while listening on a loopback address, for a reverse proxy on the same machine that forwards the client's `Host` (e.g. `mcp.example.com`). |
@@ -88,6 +85,13 @@ Environment variables:
 }
 ```
 
+The server is read-only by default. To enable tools that write to YNAB, add
+this entry to `env` explicitly:
+
+```json
+"YNAB_READ_ONLY": "false"
+```
+
 ### Self-hosted: streamable HTTP
 
 To run the server in a container or behind your own reverse proxy or MCP
@@ -95,7 +99,7 @@ gateway, start the HTTP entry point instead of the stdio one.
 
 > **It does no authentication of its own.** Anyone who can reach `/mcp` uses
 > your YNAB token with every tool you expose, including the write tools
-> unless `YNAB_READ_ONLY` is set. It listens on `127.0.0.1` unless you set
+> if you set `YNAB_READ_ONLY=false`. It listens on `127.0.0.1` unless you set
 > `YNAB_MCP_HOST`; only widen that on a private network or behind a proxy
 > that authenticates callers. For a hosted endpoint with sign-in built in,
 > use the Worker below.
@@ -114,11 +118,11 @@ looks up a package called `ynab-mcp-server-http`:
 YNAB_API_TOKEN=your-token npx --package ynab-mcp-server ynab-mcp-server-http
 ```
 
-In a container, where it must listen on every interface, start read-only
-unless whatever sits in front of it authenticates callers:
+In a container, where it must listen on every interface, leave it read-only
+(the default) unless whatever sits in front of it authenticates callers:
 
 ```sh
-YNAB_API_TOKEN=your-token YNAB_READ_ONLY=true YNAB_MCP_HOST=0.0.0.0 PORT=3000 node dist/http.js
+YNAB_API_TOKEN=your-token YNAB_MCP_HOST=0.0.0.0 PORT=3000 node dist/http.js
 ```
 
 It serves stateless [streamable HTTP](https://modelcontextprotocol.io/specification/2025-06-18/basic/transports#streamable-http)
@@ -228,8 +232,9 @@ YNAB recommends a Personal Access Token for an individual accessing their own
 account
 ([Personal Access Tokens](https://api.ynab.com/#personal-access-tokens)).
 
-Setting `YNAB_READ_ONLY` to `"true"` drops every YNAB write tool from the tool
-list, which is worth considering for a connector you will mostly use on a phone.
+The server is read-only unless you opt in: every YNAB write tool is left out
+of the tool list until you set `YNAB_READ_ONLY` to `"false"`. Keeping it
+read-only is worth considering for a connector you will mostly use on a phone.
 
 ## Tools
 
@@ -252,7 +257,7 @@ happens in `src/tools/money.ts`.
 | `ynab_list_payees` | Payees, for resolving payee IDs. |
 | `ynab_list_months` | Every plan month since the plan began, with raw income, budgeted, activity, Ready to Assign, age-of-money and note fields. For recent income versus spending, use `ynab_cash_flow`. |
 | `ynab_list_scheduled_transactions` | The scheduled transactions set up in YNAB. For recurring charges found in transaction history, see `ynab_detect_recurring`; for a projected balance, `ynab_balance_forecast`. |
-| `ynab_get_transactions` | Transactions optionally filtered to `sinceDate`–`untilDate`, by `type` (`all`/`uncategorized`/`unapproved`), and by at most one of `accountId`, `categoryId` or `payeeId` (the first in that order wins). To search, add `payeeContains`, `memoContains` (case-insensitive), `minAmount`/`maxAmount` (ignoring sign) or `direction` (`outflow`/`inflow`/`any`); any search option or `untilDate` adds a `totals` block (`count`, `inflow`, `outflow`, `net`) over every match, including transfers between accounts, and `totalsOnly: true` returns only that. Without `categoryId` or `payeeId`, splits are matched leg by leg and the totals count only the matching legs; with them, rows are matched as YNAB returns them, so a split's parent row in the payee listing counts at its full amount. Rows come back newest first; `limit` defaults to 100, keeps the most recent rows, and does not affect the totals. |
+| `ynab_get_transactions` | Transactions optionally filtered to `sinceDate`–`untilDate`, by `type` (`all`/`uncategorized`/`unapproved`), and by at most one of `accountId`, `categoryId` or `payeeId` (the first in that order wins). To search, add `payeeContains`, `memoContains` (case-insensitive), `minAmount`/`maxAmount` (ignoring sign) or `direction` (`outflow`/`inflow`/`any`); any search option or `untilDate` adds a `totals` block (`count`, `inflow`, `outflow`, `net`) over every match, including transfers between accounts, and `totalsOnly: true` returns only that. Without `categoryId` or `payeeId`, splits are matched leg by leg and the totals count only the matching legs; with them, rows are matched as YNAB returns them, so a split's parent row in the payee listing counts at its full amount. Imported rows also carry `import_payee_name` (YNAB's cleaned-up payee) and `import_payee_name_original` (the bank's raw text). Rows come back newest first; `limit` defaults to 100, keeps the most recent rows, and does not affect the totals. |
 | `ynab_suggest_categories` | Opt-in, read-only category previews for unapproved, uncategorized ordinary outflows. Deleted and categorized rows are dropped in default mode; approved, reconciled, balance-adjustment, transfer, split, and inflow rows are skipped as applicable. |
 
 ### Category suggestions (optional)
@@ -392,6 +397,7 @@ than money movement.
 | `ynab_create_transaction` | Creates a transaction. Needs `date`, `amount`, an account (`accountId` or `accountName`) and a payee (`payeeId` or `payeeName`); category optional as `categoryId` or `categoryName`, or `subtransactions` to split it. |
 | `ynab_update_transaction` | Updates any subset of an existing transaction's fields, or splits an unsplit one with `subtransactions`. |
 | `ynab_delete_transaction` | Deletes a transaction. Not undoable. |
+| `ynab_manage_scheduled_transaction` | Creates, updates or deletes a scheduled transaction with `action`. Create needs `date`, `amount` and an account (`accountId` or `accountName`), with optional `frequency` (default `never`), payee, category, `memo` and `flagColor`; update needs `scheduledTransactionId` and changes only the fields given; delete needs `scheduledTransactionId` and is not undoable. YNAB only accepts a date in the future, at most 5 years ahead, and does not support split scheduled transactions here. |
 | `ynab_bulk_approve_transactions` | Approves an array of transaction IDs in one API call, or un-approves them with `approved: false`. |
 | `ynab_apply_category_suggestions` | Applies up to 25 explicit category suggestions with refetch and stale-data checks, dry-run support, and a pre-write undo manifest. Never auto-applies or approves transactions. |
 | `ynab_update_category_budget` | Sets the total budgeted amount for one category in a month. Not an increment; use `ynab_move_money` to move money between categories. |
@@ -401,12 +407,12 @@ than money movement.
 
 #### Names instead of IDs
 
-`ynab_create_transaction` accepts `accountName` and `categoryName` and matches
-them loosely against the plan, so "ally checking" finds *Ally Checking*.
-Closed accounts and hidden categories are never matched. If a name is ambiguous
-or unrecognised the call fails and names the near misses rather than guessing,
-and successful calls echo back `matchedAccount` / `matchedCategory` so a wrong
-guess is visible.
+`ynab_create_transaction` and `ynab_manage_scheduled_transaction` accept
+`accountName` and `categoryName` and match them loosely against the plan, so
+"ally checking" finds *Ally Checking*. Closed accounts and hidden categories are
+never matched. If a name is ambiguous or unrecognised the call fails and names
+the near misses rather than guessing, and successful calls echo back
+`matchedAccount` / `matchedCategory` so a wrong guess is visible.
 
 #### Split transactions
 
@@ -442,15 +448,18 @@ text content, so a failed write is never mistaken for a successful one.
 Every tool advertises MCP annotations (`readOnlyHint`, `destructiveHint`,
 `idempotentHint`, `openWorldHint`) alongside its schema. Tools that change
 neither YNAB nor the Worker's service state are `readOnlyHint: true`; among the
-YNAB writing tools, only `ynab_delete_transaction` sets `destructiveHint: true`.
+YNAB writing tools, only `ynab_delete_transaction` and
+`ynab_manage_scheduled_transaction` (whose `delete` action cannot be undone) set
+`destructiveHint: true`.
 A client may use these hints to decide which calls need a confirmation prompt.
 
 #### `cleared` and `flagColor`
 
 `ynab_create_transaction` and `ynab_update_transaction` accept `cleared` as
-one of `cleared`, `uncleared`, or `reconciled`, and `flagColor` as one of
-`red`, `orange`, `yellow`, `green`, `blue`, `purple`, or `""` to clear an
-existing flag.
+one of `cleared`, `uncleared`, or `reconciled`. They and
+`ynab_manage_scheduled_transaction` accept `flagColor` as one of `red`,
+`orange`, `yellow`, `green`, `blue`, `purple`, or `""` to clear an existing
+flag.
 
 ## Development
 

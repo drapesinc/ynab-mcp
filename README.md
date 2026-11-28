@@ -250,14 +250,14 @@ happens in `src/tools/money.ts`.
 
 | Tool | What it does |
 | --- | --- |
-| `ynab_list_plans` | Every plan on the account. Run this first to find a plan ID. |
+| `ynab_list_plans` | Every plan on the account, with `id`, `name` and the metadata YNAB returns: `last_modified_on`, `first_month`, `last_month`, `date_format` and `currency_format`. Run this first to find a plan ID. |
 | `ynab_plan_summary` | A month at a glance: income, budgeted, activity, Ready to Assign, plus categories split into `overspent`, `underfunded` (goal not yet met) and `positive_balance`. Hidden and deleted categories are excluded. `budgetVsActuals: true` adds a `budget_vs_actuals` block: `budgeted`, `activity`, `balance`, `variance` (budgeted plus activity) and `percent_used` (null when nothing was assigned) per category, subtotalled per category group and in `totals`. Credit Card Payments is listed as its own group but left out of `totals`, since its activity is card spending moving in minus payments going out. YNAB's internal Inflow: Ready to Assign category (whose activity is the month's income) is skipped; other internal categories, such as Uncategorized, are listed and counted when they have activity. |
 | `ynab_list_accounts` | Accounts with balances. `includeClosedAccounts` to see closed ones. |
 | `ynab_list_categories` | Categories grouped by category group, with goal info. |
 | `ynab_list_payees` | Payees, for resolving payee IDs. |
 | `ynab_list_months` | Every plan month since the plan began, with raw income, budgeted, activity, Ready to Assign, age-of-money and note fields. For recent income versus spending, use `ynab_cash_flow`. |
-| `ynab_list_scheduled_transactions` | The scheduled transactions set up in YNAB. For recurring charges found in transaction history, see `ynab_detect_recurring`; for a projected balance, `ynab_balance_forecast`. |
-| `ynab_get_transactions` | Transactions optionally filtered to `sinceDate`–`untilDate`, by `type` (`all`/`uncategorized`/`unapproved`), and by at most one of `accountId`, `categoryId` or `payeeId` (the first in that order wins). To search, add `payeeContains`, `memoContains` (case-insensitive), `minAmount`/`maxAmount` (ignoring sign) or `direction` (`outflow`/`inflow`/`any`); any search option or `untilDate` adds a `totals` block (`count`, `inflow`, `outflow`, `net`) over every match, including transfers between accounts, and `totalsOnly: true` returns only that. Without `categoryId` or `payeeId`, splits are matched leg by leg and the totals count only the matching legs; with them, rows are matched as YNAB returns them, so a split's parent row in the payee listing counts at its full amount. Imported rows also carry `import_payee_name` (YNAB's cleaned-up payee) and `import_payee_name_original` (the bank's raw text). Rows come back newest first; `limit` defaults to 100, keeps the most recent rows, and does not affect the totals. |
+| `ynab_list_scheduled_transactions` | The scheduled transactions set up in YNAB, optionally limited to one `accountId`. Pass `scheduledTransactionId` to fetch just that one; `accountId` is then ignored. For recurring charges found in transaction history, see `ynab_detect_recurring`; for a projected balance, `ynab_balance_forecast`. |
+| `ynab_get_transactions` | Transactions optionally filtered to `sinceDate`–`untilDate`, a plan `month` (`YYYY-MM-01` or `current`; not combinable with `accountId`/`categoryId`/`payeeId`), by `type` (`all`/`uncategorized`/`unapproved`), and by at most one of `accountId`, `categoryId` or `payeeId` (the first in that order wins). To search, add `payeeContains`, `memoContains` (case-insensitive), `minAmount`/`maxAmount` (ignoring sign) or `direction` (`outflow`/`inflow`/`any`); any search option or `untilDate` adds a `totals` block (`count`, `inflow`, `outflow`, `net`) over every match, including transfers between accounts, and `totalsOnly: true` returns only that. Without `categoryId` or `payeeId`, splits are matched leg by leg and the totals count only the matching legs; with them, rows are matched as YNAB returns them, so a split's parent row in the payee listing counts at its full amount. Imported rows also carry `import_payee_name` (YNAB's cleaned-up payee) and `import_payee_name_original` (the bank's raw text). Rows include `account_id`, `payee_id`, `category_id` and `import_id`. Pass `transactionId` to get just that one transaction; every other filter is ignored and a missing or deleted transaction is an error. Rows come back newest first; `limit` defaults to 100, keeps the most recent rows, and does not affect the totals. |
 | `ynab_suggest_categories` | Opt-in, read-only category previews for unapproved, uncategorized ordinary outflows. Deleted and categorized rows are dropped in default mode; approved, reconciled, balance-adjustment, transfer, split, and inflow rows are skipped as applicable. |
 
 ### Category suggestions (optional)
@@ -398,7 +398,8 @@ than money movement.
 | `ynab_update_transaction` | Updates any subset of an existing transaction's fields, or splits an unsplit one with `subtransactions`. |
 | `ynab_delete_transaction` | Deletes a transaction. Not undoable. |
 | `ynab_manage_scheduled_transaction` | Creates, updates or deletes a scheduled transaction with `action`. Create needs `date`, `amount` and an account (`accountId` or `accountName`), with optional `frequency` (default `never`), payee, category, `memo` and `flagColor`; update needs `scheduledTransactionId` and changes only the fields given; delete needs `scheduledTransactionId` and is not undoable. YNAB only accepts a date in the future, at most 5 years ahead, and does not support split scheduled transactions here. |
-| `ynab_bulk_approve_transactions` | Approves an array of transaction IDs in one API call, or un-approves them with `approved: false`. |
+| `ynab_bulk_approve_transactions` | Approves an array of transaction IDs in one API call, or un-approves them with `approved: false`. Deprecated: use `ynab_bulk_update_transactions` with `approved`; it will be removed in the following release. |
+| `ynab_bulk_update_transactions` | Updates amount, memo, category, payee, cleared, approved or flag on up to 500 transactions in one API call, reporting per-transaction results. Changing the category of a split is rejected per item. |
 | `ynab_apply_category_suggestions` | Applies up to 25 explicit category suggestions with refetch and stale-data checks, dry-run support, and a pre-write undo manifest. Never auto-applies or approves transactions. |
 | `ynab_update_category_budget` | Sets the total budgeted amount for one category in a month. Not an increment; use `ynab_move_money` to move money between categories. |
 | `ynab_import_transactions` | Triggers an import from linked institutions, the same as hitting Import in the YNAB app. |
@@ -455,7 +456,8 @@ A client may use these hints to decide which calls need a confirmation prompt.
 
 #### `cleared` and `flagColor`
 
-`ynab_create_transaction` and `ynab_update_transaction` accept `cleared` as
+`ynab_create_transaction`, `ynab_update_transaction` and
+`ynab_bulk_update_transactions` accept `cleared` as
 one of `cleared`, `uncleared`, or `reconciled`. They and
 `ynab_manage_scheduled_transaction` accept `flagColor` as one of `red`,
 `orange`, `yellow`, `green`, `blue`, `purple`, or `""` to clear an existing

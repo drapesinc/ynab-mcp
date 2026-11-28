@@ -9,7 +9,7 @@ import { loadProfiles, withProfiles } from "./profiles.js";
 
 const server = new McpServer({
   name: "ynab-mcp-server",
-  version: "0.10.0",
+  version: "0.11.0",
 });
 
 const readOnly = isReadOnly(process.env.YNAB_READ_ONLY);
